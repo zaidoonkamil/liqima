@@ -32,6 +32,7 @@ function parseOtpPurpose(purpose) {
 
 function parseJson(value, fallback = null) {
   if (value === undefined || value === null || value === "") return fallback;
+  if (Array.isArray(value)) value = value[0];
   if (Array.isArray(value) || typeof value === "object") return value;
   try {
     return JSON.parse(value);
@@ -41,14 +42,23 @@ function parseJson(value, fallback = null) {
 }
 
 function toNumber(value, fallback = null) {
+  if (Array.isArray(value)) value = value[0];
   if (value === undefined || value === null || value === "") return fallback;
   const parsed = Number(value);
   return Number.isNaN(parsed) ? fallback : parsed;
 }
 
 function toBool(value, fallback = false) {
+  if (Array.isArray(value)) value = value[0];
   if (value === undefined || value === null || value === "") return fallback;
   return value === true || value === "true" || value === "1" || value === 1;
+}
+
+function toText(value, fallback = null) {
+  if (Array.isArray(value)) value = value[0];
+  if (value === undefined || value === null || value === "") return fallback;
+  if (typeof value === "object") return fallback;
+  return String(value).trim();
 }
 
 function publicUser(user) {
@@ -366,10 +376,10 @@ router.post(
       profile = await RestaurantProfile.create({
         userId: user.id,
         logo,
-        coverImage: getUploadedFile(req, "coverImage", 1) || req.body.coverImage || null,
-        description: req.body.description || null,
-        address: req.body.address || null,
-        area: req.body.area || null,
+        coverImage: getUploadedFile(req, "coverImage", 1) || toText(req.body.coverImage),
+        description: toText(req.body.description),
+        address: toText(req.body.address),
+        area: toText(req.body.area),
         latitude: toNumber(req.body.latitude),
         longitude: toNumber(req.body.longitude),
         cuisineTypes: parseJson(req.body.cuisineTypes, []),
@@ -380,11 +390,11 @@ router.post(
         discountPercent: toNumber(req.body.discountPercent, 0),
         discountMinOrder: toNumber(req.body.discountMinOrder, 0),
         isOpen: toBool(req.body.isOpen, true),
-        openingTime: req.body.openingTime || null,
-        closingTime: req.body.closingTime || null,
+        openingTime: toText(req.body.openingTime),
+        closingTime: toText(req.body.closingTime),
         isFeatured: toBool(req.body.isFeatured, false),
         freeDelivery: toBool(req.body.freeDelivery, false),
-        status: req.body.status || "active",
+        status: toText(req.body.status, "active"),
       });
     }
 
