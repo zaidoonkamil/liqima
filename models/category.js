@@ -19,6 +19,10 @@ const Category = sequelize.define("Category", {
     type: DataTypes.INTEGER,
     allowNull: true,
   },
+  restaurantId: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+  },
   type: {
     type: DataTypes.ENUM("food", "restaurant", "product"),
     allowNull: false,

@@ -76,6 +76,10 @@ function restaurantInclude() {
   ];
 }
 
+function deliveryInclude() {
+  return [{ model: DeliveryProfile, as: "deliveryProfile" }];
+}
+
 function productInclude() {
   return [
     { model: Category, as: "category" },
@@ -87,6 +91,74 @@ function productInclude() {
       include: [{ model: RestaurantProfile, as: "restaurantProfile" }],
     },
   ];
+}
+
+async function getRestaurantDashboard(restaurantId) {
+  const startOfDay = new Date();
+  startOfDay.setHours(0, 0, 0, 0);
+  const endOfDay = new Date();
+  endOfDay.setHours(23, 59, 59, 999);
+
+  const [
+    restaurant,
+    products,
+    categories,
+    deliveries,
+    todayOrders,
+    allOrders,
+  ] = await Promise.all([
+    User.findOne({
+      where: { id: restaurantId, role: "restaurant" },
+      attributes: { exclude: ["password"] },
+      include: [{ model: RestaurantProfile, as: "restaurantProfile" }],
+    }),
+    Product.findAll({
+      where: { userId: restaurantId },
+      include: productInclude(),
+      order: [["createdAt", "DESC"]],
+    }),
+    Category.findAll({
+      where: { restaurantId },
+      include: [{ model: Product, as: "products", attributes: ["id"] }],
+      order: [["sortOrder", "ASC"], ["createdAt", "DESC"]],
+    }),
+    User.findAll({
+      where: { role: "delivery" },
+      attributes: { exclude: ["password"] },
+      include: [{ model: DeliveryProfile, as: "deliveryProfile", where: { restaurantId } }],
+      order: [["createdAt", "DESC"]],
+    }),
+    Order.findAll({
+      where: {
+        restaurantId,
+        createdAt: { [Op.between]: [startOfDay, endOfDay] },
+      },
+    }),
+    Order.findAll({ where: { restaurantId } }),
+  ]);
+
+  if (!restaurant) return null;
+
+  const activeTodayOrders = todayOrders.filter((order) => order.status !== "cancelled");
+  const deliveredTodayOrders = todayOrders.filter((order) => order.status === "delivered");
+  const todayRevenue = activeTodayOrders.reduce((sum, order) => sum + Number(order.total || 0), 0);
+
+  return {
+    restaurant,
+    stats: {
+      todayOrders: todayOrders.length,
+      activeOrders: allOrders.filter((order) => ["pending", "accepted", "preparing", "ready_for_pickup", "on_way"].includes(order.status)).length,
+      deliveredToday: deliveredTodayOrders.length,
+      todayRevenue,
+      productsCount: products.length,
+      categoriesCount: categories.length,
+      deliveriesCount: deliveries.length,
+      rating: Number(restaurant.rating || restaurant.restaurantProfile?.rating || 0),
+    },
+    products,
+    categories,
+    deliveries,
+  };
 }
 
 function ensureProductOwner(product, restaurantId) {
@@ -277,6 +349,7 @@ router.post("/categories", uploadImage.array("images", 1), async (req, res) => {
       sortOrder: toNumber(req.body.sortOrder, 0),
       isActive: req.body.isActive === undefined ? true : toBool(req.body.isActive, true),
       image: req.files?.[0]?.filename || req.body.image || null,
+      restaurantId: toNumber(req.body.restaurantId),
     });
 
     return res.status(201).json(category);
@@ -288,14 +361,65 @@ router.post("/categories", uploadImage.array("images", 1), async (req, res) => {
 
 router.get("/categories", async (req, res) => {
   try {
+    const where = {};
+    if (req.query.restaurantId) where.restaurantId = req.query.restaurantId;
+    if (req.query.type) where.type = req.query.type;
+    if (req.query.includeInactive !== "true") where.isActive = true;
+
     const categories = await Category.findAll({
-      where: { isActive: true },
+      where,
       include: [{ model: Category, as: "subcategories" }],
       order: [["sortOrder", "ASC"], ["createdAt", "DESC"]],
     });
     return res.json(categories);
   } catch (error) {
     console.error("Categories error:", error);
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+router.patch("/categories/:id", uploadImage.array("images", 1), async (req, res) => {
+  try {
+    const category = await Category.findByPk(req.params.id);
+    if (!category) return res.status(404).json({ error: "Category not found" });
+
+    const restaurantId = toNumber(req.body.restaurantId || req.query.restaurantId);
+    if (category.restaurantId && restaurantId && Number(category.restaurantId) !== restaurantId) {
+      return res.status(403).json({ error: "Category does not belong to this restaurant" });
+    }
+
+    if (req.body.name !== undefined) category.name = req.body.name;
+    if (req.body.type !== undefined) category.type = req.body.type;
+    if (req.body.parentId !== undefined) category.parentId = toNumber(req.body.parentId);
+    if (req.body.sortOrder !== undefined) category.sortOrder = toNumber(req.body.sortOrder, category.sortOrder);
+    if (req.body.isActive !== undefined) category.isActive = toBool(req.body.isActive, true);
+    if (req.body.restaurantId !== undefined) category.restaurantId = toNumber(req.body.restaurantId);
+    if (req.files?.[0]) category.image = req.files[0].filename;
+    if (req.body.image !== undefined && !req.files?.[0]) category.image = req.body.image || null;
+
+    await category.save();
+    return res.json(category);
+  } catch (error) {
+    console.error("Update category error:", error);
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+router.delete("/categories/:id", async (req, res) => {
+  try {
+    const category = await Category.findByPk(req.params.id);
+    if (!category) return res.status(404).json({ error: "Category not found" });
+
+    const restaurantId = toNumber(req.body.restaurantId || req.query.restaurantId);
+    if (category.restaurantId && restaurantId && Number(category.restaurantId) !== restaurantId) {
+      return res.status(403).json({ error: "Category does not belong to this restaurant" });
+    }
+
+    await Product.update({ categoryId: null }, { where: { categoryId: category.id } });
+    await category.destroy();
+    return res.json({ message: "Category deleted successfully" });
+  } catch (error) {
+    console.error("Delete category error:", error);
     return res.status(500).json({ error: "Internal Server Error" });
   }
 });
@@ -400,6 +524,17 @@ router.get("/restaurants/:id", async (req, res) => {
     return res.json(restaurant);
   } catch (error) {
     console.error("Restaurant details error:", error);
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+router.get("/restaurants/:id/dashboard", async (req, res) => {
+  try {
+    const dashboard = await getRestaurantDashboard(req.params.id);
+    if (!dashboard) return res.status(404).json({ error: "Restaurant not found" });
+    return res.json(dashboard);
+  } catch (error) {
+    console.error("Restaurant dashboard error:", error);
     return res.status(500).json({ error: "Internal Server Error" });
   }
 });
@@ -545,7 +680,7 @@ router.post(
       phone,
       password: await bcrypt.hash(password, saltRounds),
       role: "delivery",
-      isVerified: false,
+      isVerified: true,
       image: getUploadedFile(req, "image", 0),
     });
 
@@ -558,8 +693,8 @@ router.post(
       currentLatitude: toNumber(req.body.currentLatitude),
       currentLongitude: toNumber(req.body.currentLongitude),
       restaurantId,
-      isAvailable: toBool(req.body.isAvailable, false),
-      status: req.body.status || "pending",
+      isAvailable: toBool(req.body.isAvailable, true),
+      status: req.body.status || "active",
     });
 
     return res.status(201).json({ user: publicUser(user), profile });
@@ -633,6 +768,77 @@ router.patch("/deliveries/:id/restaurant", async (req, res) => {
   }
 });
 
+router.patch(
+  "/deliveries/:id",
+  uploadImage.fields([
+    { name: "images", maxCount: 2 },
+    { name: "image", maxCount: 1 },
+    { name: "licenseImage", maxCount: 1 },
+  ]),
+  async (req, res) => {
+    try {
+      const delivery = await User.findOne({
+        where: { id: req.params.id, role: "delivery" },
+        include: deliveryInclude(),
+      });
+      if (!delivery?.deliveryProfile) return res.status(404).json({ error: "Delivery not found" });
+
+      const restaurantId = toNumber(req.body.restaurantId || req.query.restaurantId);
+      if (restaurantId && Number(delivery.deliveryProfile.restaurantId) !== restaurantId) {
+        return res.status(403).json({ error: "Delivery does not belong to this restaurant" });
+      }
+
+      if (req.body.name !== undefined) delivery.name = req.body.name;
+      if (req.body.phone !== undefined) delivery.phone = normalizePhone(req.body.phone);
+      if (req.body.password) delivery.password = await bcrypt.hash(req.body.password, saltRounds);
+      if (req.files?.image?.[0]) delivery.image = req.files.image[0].filename;
+      await delivery.save();
+
+      if (req.body.vehicleType !== undefined) delivery.deliveryProfile.vehicleType = req.body.vehicleType || null;
+      if (req.body.vehicleNumber !== undefined) delivery.deliveryProfile.vehicleNumber = req.body.vehicleNumber || null;
+      if (req.body.nationalId !== undefined) delivery.deliveryProfile.nationalId = req.body.nationalId || null;
+      if (req.body.isAvailable !== undefined) delivery.deliveryProfile.isAvailable = toBool(req.body.isAvailable, true);
+      if (req.body.status !== undefined) delivery.deliveryProfile.status = req.body.status;
+      if (req.body.restaurantId !== undefined) delivery.deliveryProfile.restaurantId = toNumber(req.body.restaurantId);
+      if (req.files?.licenseImage?.[0]) delivery.deliveryProfile.licenseImage = req.files.licenseImage[0].filename;
+      if (req.body.licenseImage !== undefined && !req.files?.licenseImage?.[0]) {
+        delivery.deliveryProfile.licenseImage = req.body.licenseImage || null;
+      }
+      await delivery.deliveryProfile.save();
+
+      const updatedDelivery = await User.findByPk(delivery.id, {
+        attributes: { exclude: ["password"] },
+        include: deliveryInclude(),
+      });
+      return res.json(updatedDelivery);
+    } catch (error) {
+      console.error("Update delivery error:", error);
+      return res.status(500).json({ error: "Internal Server Error" });
+    }
+  }
+);
+
+router.delete("/deliveries/:id", async (req, res) => {
+  try {
+    const delivery = await User.findOne({
+      where: { id: req.params.id, role: "delivery" },
+      include: deliveryInclude(),
+    });
+    if (!delivery?.deliveryProfile) return res.status(404).json({ error: "Delivery not found" });
+
+    const restaurantId = toNumber(req.body.restaurantId || req.query.restaurantId);
+    if (restaurantId && Number(delivery.deliveryProfile.restaurantId) !== restaurantId) {
+      return res.status(403).json({ error: "Delivery does not belong to this restaurant" });
+    }
+
+    await delivery.destroy();
+    return res.json({ message: "Delivery deleted successfully" });
+  } catch (error) {
+    console.error("Delete delivery error:", error);
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
 router.post("/products", uploadImage.array("images", 5), async (req, res) => {
   try {
     const { name, userId } = req.body;
@@ -672,7 +878,8 @@ router.post("/products", uploadImage.array("images", 5), async (req, res) => {
 
 router.get("/products", async (req, res) => {
   try {
-    const where = { isAvailable: true };
+    const where = {};
+    if (req.query.includeUnavailable !== "true") where.isAvailable = true;
     if (req.query.restaurantId) where.userId = req.query.restaurantId;
     if (req.query.categoryId) where.categoryId = req.query.categoryId;
     if (req.query.popular !== undefined) where.isPopular = toBool(req.query.popular, true);

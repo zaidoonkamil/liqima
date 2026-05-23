@@ -94,6 +94,9 @@ User.hasMany(ChatMessage, { as: "receivedMessages", foreignKey: "receiverId" , o
 Category.hasMany(Product, { foreignKey: "categoryId", as: "products", onDelete: "CASCADE" });
 Product.belongsTo(Category, { foreignKey: "categoryId", as: "category", onDelete: "CASCADE" });
 
+User.hasMany(Category, { foreignKey: "restaurantId", as: "restaurantCategories", onDelete: "CASCADE" });
+Category.belongsTo(User, { foreignKey: "restaurantId", as: "restaurant", onDelete: "CASCADE" });
+
 Category.hasMany(Category, { foreignKey: "parentId", as: "subcategories", onDelete: "CASCADE" });
 Category.belongsTo(Category, { foreignKey: "parentId", as: "parent", onDelete: "CASCADE" });
 
