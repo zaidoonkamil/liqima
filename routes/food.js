@@ -294,6 +294,11 @@ router.post("/restaurants", uploadImage.array("images", 2), async (req, res) => 
       return res.status(400).json({ error: "name, phone and password are required" });
     }
 
+    const logo = req.files?.[0]?.filename || req.body.logo || null;
+    if (!logo) {
+      return res.status(400).json({ error: "Restaurant logo image is required" });
+    }
+
     const existingPhone = await User.findOne({ where: { phone } });
     if (existingPhone) {
       return res.status(400).json({ error: "Phone number is already in use" });
@@ -305,12 +310,12 @@ router.post("/restaurants", uploadImage.array("images", 2), async (req, res) => 
       password: await bcrypt.hash(password, saltRounds),
       role: "restaurant",
       isVerified: true,
-      image: req.files?.[0]?.filename || null,
+      image: logo,
     });
 
     const profile = await RestaurantProfile.create({
       userId: user.id,
-      logo: req.files?.[0]?.filename || req.body.logo || null,
+      logo,
       coverImage: req.files?.[1]?.filename || req.body.coverImage || null,
       description: req.body.description || null,
       address: req.body.address || null,
@@ -325,6 +330,8 @@ router.post("/restaurants", uploadImage.array("images", 2), async (req, res) => 
       discountPercent: toNumber(req.body.discountPercent, 0),
       discountMinOrder: toNumber(req.body.discountMinOrder, 0),
       isOpen: toBool(req.body.isOpen, true),
+      openingTime: req.body.openingTime || null,
+      closingTime: req.body.closingTime || null,
       isFeatured: toBool(req.body.isFeatured, false),
       freeDelivery: toBool(req.body.freeDelivery, false),
       status: req.body.status || "pending",

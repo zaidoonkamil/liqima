@@ -440,6 +440,14 @@ async function ensureSchema(sequelize) {
     type: DataTypes.INTEGER,
     allowNull: true,
   });
+  await ensureColumn(queryInterface, "RestaurantProfiles", "openingTime", {
+    type: DataTypes.STRING,
+    allowNull: true,
+  });
+  await ensureColumn(queryInterface, "RestaurantProfiles", "closingTime", {
+    type: DataTypes.STRING,
+    allowNull: true,
+  });
   await ensureColumn(queryInterface, "CouponUsages", "discountAmount", {
     type: DataTypes.FLOAT,
     allowNull: false,

@@ -87,6 +87,14 @@ const RestaurantProfile = sequelize.define("RestaurantProfile", {
     allowNull: false,
     defaultValue: true,
   },
+  openingTime: {
+    type: DataTypes.STRING,
+    allowNull: true,
+  },
+  closingTime: {
+    type: DataTypes.STRING,
+    allowNull: true,
+  },
   isFeatured: {
     type: DataTypes.BOOLEAN,
     allowNull: false,
