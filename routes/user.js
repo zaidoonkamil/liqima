@@ -58,6 +58,11 @@ function publicUser(user) {
   return json;
 }
 
+function getUploadedFile(req, fieldName, fallbackIndex = 0) {
+  if (Array.isArray(req.files)) return req.files[fallbackIndex]?.filename || null;
+  return req.files?.[fieldName]?.[0]?.filename || req.files?.images?.[fallbackIndex]?.filename || null;
+}
+
 async function sendOtpForPurpose(phone, purpose) {
   await ensureWhatsAppReady();
   const otp = await createOtp(phone, purpose);
@@ -312,7 +317,16 @@ router.post("/admins", uploadImage.array("images", 5), async (req, res) => {
   }
 });
 
-router.post("/admin/users", uploadImage.array("images", 2), async (req, res) => {
+router.post(
+  "/admin/users",
+  uploadImage.fields([
+    { name: "images", maxCount: 2 },
+    { name: "logo", maxCount: 1 },
+    { name: "coverImage", maxCount: 1 },
+    { name: "image", maxCount: 1 },
+    { name: "licenseImage", maxCount: 1 },
+  ]),
+  async (req, res) => {
   const { name, password, role = "user" } = req.body;
   let { phone } = req.body;
 
@@ -327,7 +341,7 @@ router.post("/admin/users", uploadImage.array("images", 2), async (req, res) => 
       return res.status(400).json({ error: "name, phone and password are required" });
     }
 
-    const logo = req.files?.[0]?.filename || req.body.logo || null;
+    const logo = getUploadedFile(req, "logo", 0) || req.body.logo || null;
     if (role === "restaurant" && !logo) {
       return res.status(400).json({ error: "Restaurant logo image is required" });
     }
@@ -343,7 +357,7 @@ router.post("/admin/users", uploadImage.array("images", 2), async (req, res) => 
       password: await bcrypt.hash(password, saltRounds),
       role,
       isVerified: true,
-      image: role === "restaurant" ? logo : req.files?.[0]?.filename || null,
+      image: role === "restaurant" ? logo : getUploadedFile(req, "image", 0),
     });
 
     let profile = null;
@@ -352,7 +366,7 @@ router.post("/admin/users", uploadImage.array("images", 2), async (req, res) => 
       profile = await RestaurantProfile.create({
         userId: user.id,
         logo,
-        coverImage: req.files?.[1]?.filename || req.body.coverImage || null,
+        coverImage: getUploadedFile(req, "coverImage", 1) || req.body.coverImage || null,
         description: req.body.description || null,
         address: req.body.address || null,
         area: req.body.area || null,
@@ -381,7 +395,7 @@ router.post("/admin/users", uploadImage.array("images", 2), async (req, res) => 
         vehicleType: req.body.vehicleType || null,
         vehicleNumber: req.body.vehicleNumber || null,
         nationalId: req.body.nationalId || null,
-        licenseImage: req.files?.[1]?.filename || req.body.licenseImage || null,
+        licenseImage: getUploadedFile(req, "licenseImage", 1) || req.body.licenseImage || null,
         currentLatitude: toNumber(req.body.currentLatitude),
         currentLongitude: toNumber(req.body.currentLongitude),
         isAvailable: toBool(req.body.isAvailable, false),

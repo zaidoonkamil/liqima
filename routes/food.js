@@ -47,6 +47,11 @@ function publicUser(user) {
   return json;
 }
 
+function getUploadedFile(req, fieldName, fallbackIndex = 0) {
+  if (Array.isArray(req.files)) return req.files[fallbackIndex]?.filename || null;
+  return req.files?.[fieldName]?.[0]?.filename || req.files?.images?.[fallbackIndex]?.filename || null;
+}
+
 function restaurantInclude() {
   return [
     { model: RestaurantProfile, as: "restaurantProfile" },
@@ -285,7 +290,14 @@ router.get("/categories", async (req, res) => {
   }
 });
 
-router.post("/restaurants", uploadImage.array("images", 2), async (req, res) => {
+router.post(
+  "/restaurants",
+  uploadImage.fields([
+    { name: "images", maxCount: 2 },
+    { name: "logo", maxCount: 1 },
+    { name: "coverImage", maxCount: 1 },
+  ]),
+  async (req, res) => {
   try {
     const phone = normalizePhone(req.body.phone);
     const { name, password } = req.body;
@@ -294,7 +306,7 @@ router.post("/restaurants", uploadImage.array("images", 2), async (req, res) => 
       return res.status(400).json({ error: "name, phone and password are required" });
     }
 
-    const logo = req.files?.[0]?.filename || req.body.logo || null;
+    const logo = getUploadedFile(req, "logo", 0) || req.body.logo || null;
     if (!logo) {
       return res.status(400).json({ error: "Restaurant logo image is required" });
     }
@@ -316,7 +328,7 @@ router.post("/restaurants", uploadImage.array("images", 2), async (req, res) => 
     const profile = await RestaurantProfile.create({
       userId: user.id,
       logo,
-      coverImage: req.files?.[1]?.filename || req.body.coverImage || null,
+      coverImage: getUploadedFile(req, "coverImage", 1) || req.body.coverImage || null,
       description: req.body.description || null,
       address: req.body.address || null,
       area: req.body.area || null,
@@ -375,7 +387,14 @@ router.get("/restaurants/:id", async (req, res) => {
   }
 });
 
-router.post("/deliveries", uploadImage.array("images", 2), async (req, res) => {
+router.post(
+  "/deliveries",
+  uploadImage.fields([
+    { name: "images", maxCount: 2 },
+    { name: "image", maxCount: 1 },
+    { name: "licenseImage", maxCount: 1 },
+  ]),
+  async (req, res) => {
   try {
     const phone = normalizePhone(req.body.phone);
     const { name, password } = req.body;
@@ -403,7 +422,7 @@ router.post("/deliveries", uploadImage.array("images", 2), async (req, res) => {
       password: await bcrypt.hash(password, saltRounds),
       role: "delivery",
       isVerified: false,
-      image: req.files?.[0]?.filename || null,
+      image: getUploadedFile(req, "image", 0),
     });
 
     const profile = await DeliveryProfile.create({
@@ -411,7 +430,7 @@ router.post("/deliveries", uploadImage.array("images", 2), async (req, res) => {
       vehicleType: req.body.vehicleType || null,
       vehicleNumber: req.body.vehicleNumber || null,
       nationalId: req.body.nationalId || null,
-      licenseImage: req.files?.[1]?.filename || req.body.licenseImage || null,
+      licenseImage: getUploadedFile(req, "licenseImage", 1) || req.body.licenseImage || null,
       currentLatitude: toNumber(req.body.currentLatitude),
       currentLongitude: toNumber(req.body.currentLongitude),
       restaurantId,
