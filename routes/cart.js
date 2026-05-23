@@ -1,0 +1,601 @@
+const express = require("express");
+const { Op } = require("sequelize");
+const sequelize = require("../config/db");
+const {
+  User,
+  UserAddress,
+  Basket,
+  BasketItem,
+  Product,
+  ProductAddon,
+  Category,
+  RestaurantProfile,
+  Order,
+  OrderItem,
+  Coupon,
+  CouponUsage,
+} = require("../models");
+const { normalizePhone } = require("../services/otpService");
+
+const router = express.Router();
+const PAYMENT_METHODS = ["cash", "card", "apple_pay"];
+
+function toNumber(value, fallback = null) {
+  if (value === undefined || value === null || value === "") return fallback;
+  const parsed = Number(value);
+  return Number.isNaN(parsed) ? fallback : parsed;
+}
+
+function parseJson(value, fallback = null) {
+  if (value === undefined || value === null || value === "") return fallback;
+  if (Array.isArray(value) || typeof value === "object") return value;
+  try {
+    return JSON.parse(value);
+  } catch (error) {
+    return fallback;
+  }
+}
+
+function basketInclude() {
+  return [
+    {
+      model: BasketItem,
+      as: "items",
+      include: [
+        {
+          model: Product,
+          as: "product",
+          include: [
+            { model: Category, as: "category" },
+            { model: ProductAddon, as: "addons" },
+            {
+              model: User,
+              as: "seller",
+              attributes: { exclude: ["password"] },
+              include: [{ model: RestaurantProfile, as: "restaurantProfile" }],
+            },
+          ],
+        },
+      ],
+    },
+  ];
+}
+
+function orderInclude() {
+  return [
+    {
+      model: OrderItem,
+      as: "items",
+      include: [{ model: Product, as: "product" }],
+    },
+    { model: User, as: "restaurant", attributes: { exclude: ["password"] }, include: [{ model: RestaurantProfile, as: "restaurantProfile" }] },
+    { model: UserAddress, as: "userAddress" },
+  ];
+}
+
+async function getOrCreateBasket(userId, transaction = null) {
+  const [basket] = await Basket.findOrCreate({
+    where: { userId },
+    defaults: { userId },
+    transaction,
+  });
+
+  return basket;
+}
+
+async function getBasket(userId, transaction = null) {
+  const basket = await getOrCreateBasket(userId, transaction);
+  return Basket.findByPk(basket.id, {
+    include: basketInclude(),
+    transaction,
+  });
+}
+
+function getSelectedAddonsTotal(item) {
+  const selectedAddons = parseJson(item.selectedAddons, []);
+  if (!Array.isArray(selectedAddons)) return 0;
+  return selectedAddons.reduce((sum, addon) => sum + toNumber(addon.price, 0), 0);
+}
+
+async function normalizeSelectedAddons(productId, value, transaction = null) {
+  const selectedAddons = parseJson(value, []);
+  if (!Array.isArray(selectedAddons) || selectedAddons.length === 0) return [];
+
+  const addonIds = selectedAddons.map((addon) => toNumber(addon.id)).filter(Boolean);
+  if (addonIds.length === 0) return selectedAddons;
+
+  const addons = await ProductAddon.findAll({
+    where: {
+      id: { [Op.in]: addonIds },
+      productId,
+      isAvailable: true,
+    },
+    transaction,
+  });
+
+  if (addons.length !== addonIds.length) {
+    throw new Error("One or more addons are not available");
+  }
+
+  return addons.map((addon) => ({
+    id: addon.id,
+    name: addon.name,
+    price: addon.price,
+    image: addon.image,
+  }));
+}
+
+function getBaseProductPrice(product) {
+  return toNumber(product?.discountPrice, null) ?? toNumber(product?.price, 0);
+}
+
+function getSizeOptions(product) {
+  const sizes = parseJson(product?.sizes, []);
+  return Array.isArray(sizes) ? sizes : [];
+}
+
+function getSizeName(size) {
+  return typeof size === "string" ? size : String(size?.name || size?.label || size?.title || "").trim();
+}
+
+function getSizePrice(size, fallbackPrice) {
+  if (typeof size === "string") return fallbackPrice;
+  return toNumber(size?.price, fallbackPrice);
+}
+
+function normalizeSelectedSize(product, selectedSize) {
+  const fallbackPrice = getBaseProductPrice(product);
+  const sizes = getSizeOptions(product);
+  if (sizes.length === 0) {
+    return { selectedSize: selectedSize || null, unitPrice: fallbackPrice };
+  }
+
+  const requestedSize = String(selectedSize || "").trim();
+  if (!requestedSize && sizes.length === 1) {
+    const size = sizes[0];
+    return {
+      selectedSize: getSizeName(size) || null,
+      unitPrice: getSizePrice(size, fallbackPrice),
+    };
+  }
+
+  const matchedSize = sizes.find((size) => getSizeName(size) === requestedSize);
+  if (!matchedSize) {
+    throw new Error("Selected size is not available for this product");
+  }
+
+  return {
+    selectedSize: getSizeName(matchedSize),
+    unitPrice: getSizePrice(matchedSize, fallbackPrice),
+  };
+}
+
+function calculateBasketSummary(basket, coupon = null) {
+  const items = basket?.items || [];
+  let subtotal = 0;
+  let itemsCount = 0;
+
+  for (const item of items) {
+    const { unitPrice } = normalizeSelectedSize(item.product, item.selectedSize);
+    const addonsTotal = getSelectedAddonsTotal(item);
+    subtotal += (unitPrice + addonsTotal) * item.quantity;
+    itemsCount += item.quantity;
+  }
+
+  const restaurant = items[0]?.product?.seller || null;
+  const restaurantProfile = restaurant?.restaurantProfile || null;
+  const minimumOrder = toNumber(restaurantProfile?.minimumOrder, 0);
+  const deliveryFeeBeforeDiscount = toNumber(restaurantProfile?.deliveryFee, 0);
+  const freeDelivery = Boolean(restaurantProfile?.freeDelivery);
+  let deliveryFee = freeDelivery ? 0 : deliveryFeeBeforeDiscount;
+  let discountAmount = 0;
+
+  if (coupon) {
+    discountAmount = calculateCouponDiscount(coupon, subtotal, deliveryFee);
+    if (coupon.type === "free_delivery") deliveryFee = 0;
+  }
+
+  const total = Math.max(subtotal + deliveryFee - discountAmount, 0);
+
+  return {
+    itemsCount,
+    subtotal,
+    deliveryFee,
+    deliveryFeeBeforeDiscount,
+    discountAmount,
+    total,
+    restaurant,
+    minimumOrder,
+    freeDelivery,
+    remainingToMinimumOrder: Math.max(minimumOrder - subtotal, 0),
+    canCheckout: items.length > 0 && subtotal >= minimumOrder,
+  };
+}
+
+function calculateCouponDiscount(coupon, subtotal, deliveryFee) {
+  if (!coupon) return 0;
+  if (coupon.type === "free_delivery") return Math.max(deliveryFee, 0);
+  if (coupon.type === "fixed") return Math.min(coupon.value, subtotal);
+
+  const discount = subtotal * (coupon.value / 100);
+  return coupon.maxDiscount ? Math.min(discount, coupon.maxDiscount) : discount;
+}
+
+async function validateCoupon({ code, userId, restaurantId, subtotal, deliveryFee }) {
+  if (!code) return { coupon: null, discountAmount: 0 };
+
+  const coupon = await Coupon.findOne({
+    where: { code: String(code).trim().toUpperCase() },
+  });
+
+  if (!coupon) return { error: "Coupon not found" };
+
+  const now = new Date();
+  if (!coupon.isActive || (coupon.startsAt && coupon.startsAt > now) || (coupon.expiresAt && coupon.expiresAt < now)) {
+    return { error: "Coupon is not available" };
+  }
+  if (coupon.totalUsageLimit !== null && coupon.totalUsageLimit !== undefined && coupon.usedCount >= coupon.totalUsageLimit) {
+    return { error: "Coupon usage limit reached" };
+  }
+  if (subtotal < coupon.minimumOrder) return { error: "Order subtotal is less than coupon minimum" };
+  if (coupon.target === "user" && Number(coupon.targetUserId) !== Number(userId)) {
+    return { error: "Coupon is not available for this user" };
+  }
+  if (coupon.target === "restaurant" && Number(coupon.restaurantId) !== Number(restaurantId)) {
+    return { error: "Coupon is not available for this restaurant" };
+  }
+
+  const userUsageCount = await CouponUsage.count({ where: { couponId: coupon.id, userId } });
+  if (userUsageCount >= coupon.perUserLimit) return { error: "Coupon usage limit reached" };
+
+  return {
+    coupon,
+    discountAmount: calculateCouponDiscount(coupon, subtotal, deliveryFee),
+  };
+}
+
+async function generateOrderNumber() {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const orderNumber = String(Math.floor(Math.random() * 90000) + 10000);
+    const exists = await Order.findOne({ where: { orderNumber } });
+    if (!exists) return orderNumber;
+  }
+  return String(Date.now()).slice(-8);
+}
+
+function formatCart(basket, coupon = null) {
+  const summary = calculateBasketSummary(basket, coupon);
+  return {
+    basket,
+    summary: {
+      itemsCount: summary.itemsCount,
+      subtotal: summary.subtotal,
+      deliveryFee: summary.deliveryFee,
+      deliveryFeeBeforeDiscount: summary.deliveryFeeBeforeDiscount,
+      discountAmount: summary.discountAmount,
+      total: summary.total,
+      minimumOrder: summary.minimumOrder,
+      remainingToMinimumOrder: summary.remainingToMinimumOrder,
+      freeDelivery: summary.freeDelivery,
+      canCheckout: summary.canCheckout,
+      couponCode: coupon?.code || null,
+    },
+    restaurant: summary.restaurant,
+  };
+}
+
+router.get("/users/:userId/cart", async (req, res) => {
+  try {
+    const userId = toNumber(req.params.userId);
+    const user = await User.findByPk(userId);
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    const basket = await getBasket(userId);
+    return res.json(formatCart(basket));
+  } catch (error) {
+    console.error("Cart error:", error);
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+router.post("/users/:userId/cart/items", async (req, res) => {
+  const transaction = await sequelize.transaction();
+
+  try {
+    const userId = toNumber(req.params.userId);
+    const productId = toNumber(req.body.productId);
+    const quantity = Math.max(toNumber(req.body.quantity, 1), 1);
+
+    if (!userId || !productId) {
+      await transaction.rollback();
+      return res.status(400).json({ error: "userId and productId are required" });
+    }
+
+    const [user, product] = await Promise.all([
+      User.findByPk(userId, { transaction }),
+      Product.findOne({
+        where: { id: productId, isAvailable: true },
+        include: [{ model: User, as: "seller" }],
+        transaction,
+      }),
+    ]);
+
+    if (!user) {
+      await transaction.rollback();
+      return res.status(404).json({ error: "User not found" });
+    }
+    if (!product) {
+      await transaction.rollback();
+      return res.status(404).json({ error: "Product not found or unavailable" });
+    }
+
+    const basket = await getOrCreateBasket(userId, transaction);
+    const currentItems = await BasketItem.findAll({
+      where: { basketId: basket.id },
+      include: [{ model: Product, as: "product" }],
+      transaction,
+    });
+    const currentRestaurantId = currentItems[0]?.product?.userId;
+    if (currentRestaurantId && currentRestaurantId !== product.userId) {
+      await transaction.rollback();
+      return res.status(400).json({ error: "Cart can contain items from one restaurant only" });
+    }
+
+    const selectedAddons = await normalizeSelectedAddons(productId, req.body.selectedAddons, transaction);
+    const selectedSize = normalizeSelectedSize(product, req.body.selectedSize).selectedSize;
+    const similarItems = await BasketItem.findAll({
+      where: {
+        basketId: basket.id,
+        productId,
+        selectedSize,
+        selectedColor: req.body.selectedColor || null,
+      },
+      transaction,
+    });
+    const existing = similarItems.find(
+      (item) => JSON.stringify(item.selectedAddons || []) === JSON.stringify(selectedAddons || [])
+    );
+
+    if (existing) {
+      existing.quantity += quantity;
+      await existing.save({ transaction });
+    } else {
+      await BasketItem.create({
+        basketId: basket.id,
+        productId,
+        quantity,
+        selectedSize,
+        selectedColor: req.body.selectedColor || null,
+        selectedAddons,
+      }, { transaction });
+    }
+
+    await transaction.commit();
+
+    const updatedBasket = await getBasket(userId);
+    return res.status(201).json(formatCart(updatedBasket));
+  } catch (error) {
+    await transaction.rollback();
+    console.error("Add cart item error:", error);
+    if (
+      error.message === "One or more addons are not available" ||
+      error.message === "Selected size is not available for this product"
+    ) {
+      return res.status(400).json({ error: error.message });
+    }
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+router.patch("/users/:userId/cart/items/:itemId", async (req, res) => {
+  try {
+    const userId = toNumber(req.params.userId);
+    const basket = await getOrCreateBasket(userId);
+    const item = await BasketItem.findOne({
+      where: { id: req.params.itemId, basketId: basket.id },
+      include: [{ model: Product, as: "product" }],
+    });
+
+    if (!item) return res.status(404).json({ error: "Cart item not found" });
+
+    if (req.body.quantity !== undefined) item.quantity = Math.max(toNumber(req.body.quantity, 1), 1);
+    if (req.body.selectedAddons !== undefined) {
+      item.selectedAddons = await normalizeSelectedAddons(item.productId, req.body.selectedAddons);
+    }
+    if (req.body.selectedSize !== undefined) {
+      item.selectedSize = normalizeSelectedSize(item.product, req.body.selectedSize).selectedSize;
+    }
+    if (req.body.selectedColor !== undefined) item.selectedColor = req.body.selectedColor || null;
+
+    await item.save();
+    const updatedBasket = await getBasket(userId);
+    return res.json(formatCart(updatedBasket));
+  } catch (error) {
+    console.error("Update cart item error:", error);
+    if (
+      error.message === "One or more addons are not available" ||
+      error.message === "Selected size is not available for this product"
+    ) {
+      return res.status(400).json({ error: error.message });
+    }
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+router.delete("/users/:userId/cart/items/:itemId", async (req, res) => {
+  try {
+    const userId = toNumber(req.params.userId);
+    const basket = await getOrCreateBasket(userId);
+    await BasketItem.destroy({ where: { id: req.params.itemId, basketId: basket.id } });
+
+    const updatedBasket = await getBasket(userId);
+    return res.json(formatCart(updatedBasket));
+  } catch (error) {
+    console.error("Delete cart item error:", error);
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+router.delete("/users/:userId/cart", async (req, res) => {
+  try {
+    const basket = await getOrCreateBasket(req.params.userId);
+    await BasketItem.destroy({ where: { basketId: basket.id } });
+    const updatedBasket = await getBasket(req.params.userId);
+    return res.json(formatCart(updatedBasket));
+  } catch (error) {
+    console.error("Clear cart error:", error);
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+router.post("/users/:userId/cart/apply-coupon", async (req, res) => {
+  try {
+    const userId = toNumber(req.params.userId);
+    const basket = await getBasket(userId);
+    const summary = calculateBasketSummary(basket);
+
+    if (!summary.restaurant) return res.status(400).json({ error: "Cart is empty" });
+
+    const validation = await validateCoupon({
+      code: req.body.code,
+      userId,
+      restaurantId: summary.restaurant.id,
+      subtotal: summary.subtotal,
+      deliveryFee: summary.deliveryFee,
+    });
+
+    if (validation.error) return res.status(400).json({ error: validation.error });
+    return res.json(formatCart(basket, validation.coupon));
+  } catch (error) {
+    console.error("Apply cart coupon error:", error);
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+router.post("/users/:userId/checkout", async (req, res) => {
+  const transaction = await sequelize.transaction();
+
+  try {
+    const userId = toNumber(req.params.userId);
+    const addressId = toNumber(req.body.addressId);
+    const paymentMethod = req.body.paymentMethod || "cash";
+
+    if (!PAYMENT_METHODS.includes(paymentMethod)) {
+      await transaction.rollback();
+      return res.status(400).json({ error: "Invalid payment method", allowedMethods: PAYMENT_METHODS });
+    }
+
+    const [user, address] = await Promise.all([
+      User.findByPk(userId, { transaction }),
+      addressId ? UserAddress.findOne({ where: { id: addressId, userId }, transaction }) : null,
+    ]);
+
+    if (!user) {
+      await transaction.rollback();
+      return res.status(404).json({ error: "User not found" });
+    }
+    if (!address) {
+      await transaction.rollback();
+      return res.status(400).json({ error: "Valid addressId is required" });
+    }
+
+    const basket = await getBasket(userId, transaction);
+    const summary = calculateBasketSummary(basket);
+    if (!summary.restaurant) {
+      await transaction.rollback();
+      return res.status(400).json({ error: "Cart is empty" });
+    }
+    if (!summary.canCheckout) {
+      await transaction.rollback();
+      return res.status(400).json({
+        error: "Order subtotal is less than restaurant minimum",
+        minimumOrder: summary.minimumOrder,
+        remainingToMinimumOrder: summary.remainingToMinimumOrder,
+      });
+    }
+
+    let coupon = null;
+    let discountAmount = 0;
+    let deliveryFee = summary.deliveryFee;
+
+    if (req.body.couponCode) {
+      const validation = await validateCoupon({
+        code: req.body.couponCode,
+        userId,
+        restaurantId: summary.restaurant.id,
+        subtotal: summary.subtotal,
+        deliveryFee,
+      });
+
+      if (validation.error) {
+        await transaction.rollback();
+        return res.status(400).json({ error: validation.error });
+      }
+
+      coupon = validation.coupon;
+      discountAmount = validation.discountAmount;
+      if (coupon.type === "free_delivery") deliveryFee = 0;
+    }
+
+    const total = Math.max(summary.subtotal + deliveryFee - discountAmount, 0);
+    const order = await Order.create({
+      userId,
+      restaurantId: summary.restaurant.id,
+      addressId: address.id,
+      orderNumber: await generateOrderNumber(),
+      status: "pending",
+      subtotal: summary.subtotal,
+      deliveryFee,
+      total,
+      discountAmount,
+      couponCode: coupon?.code || null,
+      paymentMethod,
+      paymentStatus: paymentMethod === "cash" ? "pending" : "paid",
+      phone: normalizePhone(req.body.phone || user.phone),
+      secondaryPhone: normalizePhone(req.body.secondaryPhone || ""),
+      address: address.addressText,
+      addressDetails: address.details,
+      notes: req.body.notes || null,
+    }, { transaction });
+
+    const orderItems = basket.items.map((item) => {
+      const { unitPrice } = normalizeSelectedSize(item.product, item.selectedSize);
+      return {
+        orderId: order.id,
+        productId: item.productId,
+        quantity: item.quantity,
+        price: unitPrice,
+        selectedColor: item.selectedColor,
+        selectedSize: item.selectedSize,
+        selectedAddons: item.selectedAddons,
+      };
+    });
+
+    await OrderItem.bulkCreate(orderItems, { transaction });
+
+    if (coupon) {
+      await CouponUsage.create({
+        userId,
+        couponId: coupon.id,
+        orderId: order.id,
+        discountAmount,
+      }, { transaction });
+      await coupon.increment("usedCount", { by: 1, transaction });
+    }
+
+    await BasketItem.destroy({ where: { basketId: basket.id }, transaction });
+    await transaction.commit();
+
+    const createdOrder = await Order.findByPk(order.id, { include: orderInclude() });
+    return res.status(201).json({
+      message: "Order created successfully",
+      order: createdOrder,
+    });
+  } catch (error) {
+    await transaction.rollback();
+    console.error("Checkout error:", error);
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+module.exports = router;
