@@ -5,6 +5,7 @@ const multer = require("multer");
 const { Op } = require("sequelize");
 const uploadImage = require("../middlewares/uploads");
 const { User, UserDevice, Favorite, Order, RestaurantProfile, DeliveryProfile } = require("../models");
+const sequelize = require("../config/db");
 const { createOtp, deleteOtpByCode, normalizePhone, verifyOtp } = require("../services/otpService");
 const { ensureWhatsAppReady, sendWhatsAppText } = require("../services/waSender");
 
@@ -339,6 +340,7 @@ router.post(
   async (req, res) => {
   const { name, password, role = "user" } = req.body;
   let { phone } = req.body;
+  let transaction;
 
   try {
     phone = normalizePhone(phone);
@@ -361,6 +363,8 @@ router.post(
       return res.status(400).json({ error: "Phone number is already in use" });
     }
 
+    transaction = await sequelize.transaction();
+
     const user = await User.create({
       name,
       phone,
@@ -368,7 +372,7 @@ router.post(
       role,
       isVerified: true,
       image: role === "restaurant" ? logo : getUploadedFile(req, "image", 0),
-    });
+    }, { transaction });
 
     let profile = null;
 
@@ -395,7 +399,7 @@ router.post(
         isFeatured: toBool(req.body.isFeatured, false),
         freeDelivery: toBool(req.body.freeDelivery, false),
         status: toText(req.body.status, "active"),
-      });
+      }, { transaction });
     }
 
     if (role === "delivery") {
@@ -410,14 +414,17 @@ router.post(
         currentLongitude: toNumber(req.body.currentLongitude),
         isAvailable: toBool(req.body.isAvailable, false),
         status: req.body.status || "active",
-      });
+      }, { transaction });
     }
+
+    await transaction.commit();
 
     return res.status(201).json({
       user: publicUser(user),
       profile,
     });
   } catch (err) {
+    if (transaction) await transaction.rollback();
     console.error("Admin create user error:", err);
     return res.status(500).json({ error: "Internal Server Error" });
   }

@@ -308,6 +308,8 @@ router.post(
     { name: "coverImage", maxCount: 1 },
   ]),
   async (req, res) => {
+  let transaction;
+
   try {
     const phone = normalizePhone(req.body.phone);
     const { name, password } = req.body;
@@ -326,6 +328,8 @@ router.post(
       return res.status(400).json({ error: "Phone number is already in use" });
     }
 
+    transaction = await sequelize.transaction();
+
     const user = await User.create({
       name,
       phone,
@@ -333,7 +337,7 @@ router.post(
       role: "restaurant",
       isVerified: true,
       image: logo,
-    });
+    }, { transaction });
 
     const profile = await RestaurantProfile.create({
       userId: user.id,
@@ -357,10 +361,13 @@ router.post(
       isFeatured: toBool(req.body.isFeatured, false),
       freeDelivery: toBool(req.body.freeDelivery, false),
       status: toText(req.body.status, "pending"),
-    });
+    }, { transaction });
+
+    await transaction.commit();
 
     return res.status(201).json({ user: publicUser(user), profile });
   } catch (error) {
+    if (transaction) await transaction.rollback();
     console.error("Create restaurant error:", error);
     return res.status(500).json({ error: "Internal Server Error" });
   }
@@ -396,6 +403,113 @@ router.get("/restaurants/:id", async (req, res) => {
     return res.status(500).json({ error: "Internal Server Error" });
   }
 });
+
+router.patch(
+  "/restaurants/:id/profile",
+  uploadImage.fields([
+    { name: "images", maxCount: 2 },
+    { name: "logo", maxCount: 1 },
+    { name: "coverImage", maxCount: 1 },
+  ]),
+  async (req, res) => {
+    try {
+      const restaurant = await User.findOne({
+        where: { id: req.params.id, role: "restaurant" },
+        include: [{ model: RestaurantProfile, as: "restaurantProfile" }],
+      });
+
+      if (!restaurant) return res.status(404).json({ error: "Restaurant not found" });
+
+      const currentProfile = restaurant.restaurantProfile;
+      const logo =
+        getUploadedFile(req, "logo", 0) ||
+        toText(req.body.logo) ||
+        currentProfile?.logo ||
+        restaurant.image;
+
+      if (!logo) {
+        return res.status(400).json({ error: "Restaurant logo image is required" });
+      }
+
+      const values = {
+        userId: restaurant.id,
+        logo,
+        coverImage:
+          getUploadedFile(req, "coverImage", 1) ||
+          toText(req.body.coverImage, currentProfile?.coverImage || null),
+        description: toText(req.body.description, currentProfile?.description || null),
+        address: toText(req.body.address, currentProfile?.address || null),
+        area: toText(req.body.area, currentProfile?.area || null),
+        latitude:
+          req.body.latitude === undefined
+            ? currentProfile?.latitude || null
+            : toNumber(req.body.latitude),
+        longitude:
+          req.body.longitude === undefined
+            ? currentProfile?.longitude || null
+            : toNumber(req.body.longitude),
+        cuisineTypes:
+          req.body.cuisineTypes === undefined
+            ? currentProfile?.cuisineTypes || []
+            : parseJson(req.body.cuisineTypes, []),
+        deliveryTimeMin:
+          req.body.deliveryTimeMin === undefined
+            ? currentProfile?.deliveryTimeMin || null
+            : toNumber(req.body.deliveryTimeMin),
+        deliveryTimeMax:
+          req.body.deliveryTimeMax === undefined
+            ? currentProfile?.deliveryTimeMax || null
+            : toNumber(req.body.deliveryTimeMax),
+        deliveryFee:
+          req.body.deliveryFee === undefined
+            ? currentProfile?.deliveryFee || 0
+            : toNumber(req.body.deliveryFee, 0),
+        minimumOrder:
+          req.body.minimumOrder === undefined
+            ? currentProfile?.minimumOrder || 0
+            : toNumber(req.body.minimumOrder, 0),
+        discountPercent:
+          req.body.discountPercent === undefined
+            ? currentProfile?.discountPercent || 0
+            : toNumber(req.body.discountPercent, 0),
+        discountMinOrder:
+          req.body.discountMinOrder === undefined
+            ? currentProfile?.discountMinOrder || 0
+            : toNumber(req.body.discountMinOrder, 0),
+        isOpen:
+          req.body.isOpen === undefined
+            ? currentProfile?.isOpen ?? true
+            : toBool(req.body.isOpen, true),
+        openingTime: toText(req.body.openingTime, currentProfile?.openingTime || null),
+        closingTime: toText(req.body.closingTime, currentProfile?.closingTime || null),
+        isFeatured:
+          req.body.isFeatured === undefined
+            ? currentProfile?.isFeatured || false
+            : toBool(req.body.isFeatured, false),
+        freeDelivery:
+          req.body.freeDelivery === undefined
+            ? currentProfile?.freeDelivery || false
+            : toBool(req.body.freeDelivery, false),
+        status: toText(req.body.status, currentProfile?.status || "active"),
+      };
+
+      const profile = currentProfile
+        ? await currentProfile.update(values)
+        : await RestaurantProfile.create(values);
+
+      restaurant.image = logo;
+      await restaurant.save();
+
+      return res.json({
+        user: publicUser(restaurant),
+        profile,
+      });
+    } catch (error) {
+      console.error("Upsert restaurant profile error:", error);
+      return res.status(500).json({ error: "Internal Server Error" });
+    }
+  }
+);
 
 router.post(
   "/deliveries",
