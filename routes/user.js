@@ -62,6 +62,10 @@ function toText(value, fallback = null) {
   return String(value).trim();
 }
 
+function isAutoVerifiedRole(role) {
+  return role !== "user";
+}
+
 function publicUser(user) {
   if (!user) return null;
   const json = user.toJSON ? user.toJSON() : user;
@@ -370,7 +374,7 @@ router.post(
       phone,
       password: await bcrypt.hash(password, saltRounds),
       role,
-      isVerified: true,
+      isVerified: isAutoVerifiedRole(role),
       image: role === "restaurant" ? logo : getUploadedFile(req, "image", 0),
     }, { transaction });
 
@@ -447,6 +451,11 @@ router.post("/login", upload.none(), async (req, res) => {
     const isPasswordValid = await bcrypt.compare(password, user.password);
     if (!isPasswordValid) {
       return res.status(400).json({ error: "Invalid password" });
+    }
+
+    if (isAutoVerifiedRole(user.role) && !user.isVerified) {
+      user.isVerified = true;
+      await user.save();
     }
 
     if (!user.isVerified) {
