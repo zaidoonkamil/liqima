@@ -240,6 +240,7 @@ router.post("/forgot-password/reset", upload.none(), async (req, res) => {
 
 router.post("/users", uploadImage.array("images", 5), async (req, res) => {
   const { name, password } = req.body;
+  const role = req.body.role === "admin" ? "admin" : "user";
   let { phone } = req.body;
 
   try {
@@ -264,8 +265,8 @@ router.post("/users", uploadImage.array("images", 5), async (req, res) => {
       name,
       phone,
       password: hashedPassword,
-      role: "user",
-      isVerified: false,
+      role,
+      isVerified: isAutoVerifiedRole(role),
       image: images.length > 0 ? images[0] : null,
     });
 
