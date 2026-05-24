@@ -66,6 +66,22 @@ function isAutoVerifiedRole(role) {
   return role !== "user";
 }
 
+function readBearerToken(req) {
+  const authHeader = req.headers.authorization || "";
+  return authHeader.startsWith("Bearer ") ? authHeader.slice(7) : authHeader;
+}
+
+function authenticateUser(req, res, next) {
+  const token = readBearerToken(req);
+  if (!token) return res.status(401).json({ error: "Token is missing" });
+
+  jwt.verify(token, process.env.JWT_SECRET, (error, decoded) => {
+    if (error) return res.status(401).json({ error: "Invalid token" });
+    req.user = decoded;
+    return next();
+  });
+}
+
 function publicUser(user) {
   if (!user) return null;
   const json = user.toJSON ? user.toJSON() : user;
@@ -479,6 +495,8 @@ router.post("/login", upload.none(), async (req, res) => {
         isVerified: user.isVerified,
         role: user.role,
         location: user.location,
+        latitude: user.latitude,
+        longitude: user.longitude,
       },
       token,
     });
@@ -506,6 +524,36 @@ router.delete("/users/:id", async (req, res) => {
   } catch (err) {
     console.error("Delete user error:", err);
     return res.status(500).json({ error: "Delete failed" });
+  }
+});
+
+router.patch("/users/me/location", upload.none(), authenticateUser, async (req, res) => {
+  try {
+    const latitude = toNumber(req.body.latitude);
+    const longitude = toNumber(req.body.longitude);
+    const location = toText(req.body.location);
+
+    if (latitude === null || longitude === null) {
+      return res.status(400).json({ error: "latitude and longitude are required" });
+    }
+
+    const user = await User.findByPk(req.user.id);
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    user.latitude = latitude;
+    user.longitude = longitude;
+    user.location = location || `${latitude}, ${longitude}`;
+    await user.save();
+
+    return res.json({
+      id: user.id,
+      location: user.location,
+      latitude: user.latitude,
+      longitude: user.longitude,
+    });
+  } catch (error) {
+    console.error("Update user location error:", error);
+    return res.status(500).json({ error: "Internal Server Error" });
   }
 });
 

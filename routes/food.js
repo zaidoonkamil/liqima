@@ -439,6 +439,7 @@ router.delete("/categories/:id", authenticateAdmin, async (req, res) => {
 
 router.post(
   "/restaurants",
+  authenticateAdmin,
   uploadImage.fields([
     { name: "images", maxCount: 2 },
     { name: "logo", maxCount: 1 },
@@ -569,6 +570,21 @@ router.patch(
       if (!restaurant) return res.status(404).json({ error: "Restaurant not found" });
 
       const currentProfile = restaurant.restaurantProfile;
+      const phone = normalizePhone(req.body.phone);
+      if (req.body.name !== undefined) restaurant.name = req.body.name;
+      if (phone && phone !== restaurant.phone) {
+        const existingPhone = await User.findOne({
+          where: { phone, id: { [Op.ne]: restaurant.id } },
+        });
+        if (existingPhone) {
+          return res.status(400).json({ error: "Phone number is already in use" });
+        }
+        restaurant.phone = phone;
+      }
+      if (req.body.password) {
+        restaurant.password = await bcrypt.hash(req.body.password, saltRounds);
+      }
+
       const logo =
         getUploadedFile(req, "logo", 0) ||
         toText(req.body.logo) ||
