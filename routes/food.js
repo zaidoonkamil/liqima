@@ -1,5 +1,6 @@
 const express = require("express");
 const bcrypt = require("bcrypt");
+const jwt = require("jsonwebtoken");
 const { Op } = require("sequelize");
 const uploadImage = require("../middlewares/uploads");
 const {
@@ -18,6 +19,20 @@ const { normalizePhone } = require("../services/otpService");
 
 const router = express.Router();
 const saltRounds = 10;
+
+function authenticateAdmin(req, res, next) {
+  const authHeader = req.headers.authorization || "";
+  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : authHeader;
+
+  if (!token) return res.status(401).json({ error: "Admin token is required" });
+
+  jwt.verify(token, process.env.JWT_SECRET, (error, user) => {
+    if (error) return res.status(403).json({ error: "Invalid admin token" });
+    if (user.role !== "admin") return res.status(403).json({ error: "Admin only" });
+    req.user = user;
+    return next();
+  });
+}
 
 function parseJson(value, fallback = null) {
   if (value === undefined || value === null || value === "") return fallback;
@@ -118,8 +133,16 @@ async function getRestaurantDashboard(restaurantId) {
       order: [["createdAt", "DESC"]],
     }),
     Category.findAll({
-      where: { restaurantId },
-      include: [{ model: Product, as: "products", attributes: ["id"] }],
+      where: { type: "food", isActive: true },
+      include: [
+        {
+          model: Product,
+          as: "products",
+          attributes: ["id"],
+          where: { userId: restaurantId },
+          required: false,
+        },
+      ],
       order: [["sortOrder", "ASC"], ["createdAt", "DESC"]],
     }),
     User.findAll({
@@ -337,7 +360,7 @@ router.get("/search", async (req, res) => {
   }
 });
 
-router.post("/categories", uploadImage.array("images", 1), async (req, res) => {
+router.post("/categories", authenticateAdmin, uploadImage.array("images", 1), async (req, res) => {
   try {
     const { name, type = "food" } = req.body;
     if (!name) return res.status(400).json({ error: "name is required" });
@@ -349,7 +372,7 @@ router.post("/categories", uploadImage.array("images", 1), async (req, res) => {
       sortOrder: toNumber(req.body.sortOrder, 0),
       isActive: req.body.isActive === undefined ? true : toBool(req.body.isActive, true),
       image: req.files?.[0]?.filename || req.body.image || null,
-      restaurantId: toNumber(req.body.restaurantId),
+      restaurantId: null,
     });
 
     return res.status(201).json(category);
@@ -362,7 +385,7 @@ router.post("/categories", uploadImage.array("images", 1), async (req, res) => {
 router.get("/categories", async (req, res) => {
   try {
     const where = {};
-    if (req.query.restaurantId) where.restaurantId = req.query.restaurantId;
+    if (req.query.globalOnly !== "false") where.restaurantId = null;
     if (req.query.type) where.type = req.query.type;
     if (req.query.includeInactive !== "true") where.isActive = true;
 
@@ -378,22 +401,17 @@ router.get("/categories", async (req, res) => {
   }
 });
 
-router.patch("/categories/:id", uploadImage.array("images", 1), async (req, res) => {
+router.patch("/categories/:id", authenticateAdmin, uploadImage.array("images", 1), async (req, res) => {
   try {
     const category = await Category.findByPk(req.params.id);
     if (!category) return res.status(404).json({ error: "Category not found" });
-
-    const restaurantId = toNumber(req.body.restaurantId || req.query.restaurantId);
-    if (category.restaurantId && restaurantId && Number(category.restaurantId) !== restaurantId) {
-      return res.status(403).json({ error: "Category does not belong to this restaurant" });
-    }
 
     if (req.body.name !== undefined) category.name = req.body.name;
     if (req.body.type !== undefined) category.type = req.body.type;
     if (req.body.parentId !== undefined) category.parentId = toNumber(req.body.parentId);
     if (req.body.sortOrder !== undefined) category.sortOrder = toNumber(req.body.sortOrder, category.sortOrder);
     if (req.body.isActive !== undefined) category.isActive = toBool(req.body.isActive, true);
-    if (req.body.restaurantId !== undefined) category.restaurantId = toNumber(req.body.restaurantId);
+    category.restaurantId = null;
     if (req.files?.[0]) category.image = req.files[0].filename;
     if (req.body.image !== undefined && !req.files?.[0]) category.image = req.body.image || null;
 
@@ -405,15 +423,10 @@ router.patch("/categories/:id", uploadImage.array("images", 1), async (req, res)
   }
 });
 
-router.delete("/categories/:id", async (req, res) => {
+router.delete("/categories/:id", authenticateAdmin, async (req, res) => {
   try {
     const category = await Category.findByPk(req.params.id);
     if (!category) return res.status(404).json({ error: "Category not found" });
-
-    const restaurantId = toNumber(req.body.restaurantId || req.query.restaurantId);
-    if (category.restaurantId && restaurantId && Number(category.restaurantId) !== restaurantId) {
-      return res.status(403).json({ error: "Category does not belong to this restaurant" });
-    }
 
     await Product.update({ categoryId: null }, { where: { categoryId: category.id } });
     await category.destroy();
