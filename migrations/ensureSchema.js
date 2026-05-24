@@ -468,6 +468,15 @@ async function ensureSchema(sequelize) {
     defaultValue: 3,
   });
 
+  await ensureColumn(queryInterface, "ProductAddons", "restaurantId", {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+  });
+  await changeColumnIfTableExists(queryInterface, "ProductAddons", "productId", {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+  });
+
   await ensureColumn(queryInterface, "BasketItems", "selectedColor", {
     type: DataTypes.STRING,
     allowNull: true,
