@@ -27,6 +27,20 @@ async function changeColumnIfTableExists(queryInterface, tableName, columnName, 
   await queryInterface.changeColumn(tableName, columnName, definition);
 }
 
+async function ensureNullableIntegerColumn(queryInterface, tableName, columnName) {
+  const exists = await tableExists(queryInterface, tableName);
+  if (!exists) return;
+
+  const table = await queryInterface.describeTable(tableName);
+  if (!table[columnName]) return;
+  if (table[columnName].allowNull === true) return;
+
+  await queryInterface.sequelize.query(
+    `ALTER TABLE \`${tableName}\` MODIFY \`${columnName}\` INTEGER NULL;`
+  );
+  console.log(`Changed ${tableName}.${columnName} to nullable`);
+}
+
 async function ensureAppSettingsTable(queryInterface) {
   if (await tableExists(queryInterface, "AppSettings")) return;
 
@@ -476,6 +490,7 @@ async function ensureSchema(sequelize) {
     type: DataTypes.INTEGER,
     allowNull: true,
   });
+  await ensureNullableIntegerColumn(queryInterface, "ProductAddons", "productId");
 
   await ensureColumn(queryInterface, "BasketItems", "selectedColor", {
     type: DataTypes.STRING,
