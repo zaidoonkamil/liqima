@@ -34,6 +34,66 @@ function authenticateAdmin(req, res, next) {
   });
 }
 
+function readBearerToken(req) {
+  const authHeader = req.headers.authorization || "";
+  return authHeader.startsWith("Bearer ") ? authHeader.slice(7) : authHeader;
+}
+
+async function resolveRequestLocation(req) {
+  let latitude = toNumber(req.query.latitude);
+  let longitude = toNumber(req.query.longitude);
+
+  if (latitude !== null && longitude !== null) return { latitude, longitude };
+
+  const token = readBearerToken(req);
+  if (!token) return null;
+
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const user = await User.findByPk(decoded.id);
+    latitude = toNumber(user?.latitude);
+    longitude = toNumber(user?.longitude);
+    if (latitude !== null && longitude !== null) return { latitude, longitude };
+  } catch (error) {
+    return null;
+  }
+
+  return null;
+}
+
+function distanceKm(origin, profile) {
+  if (!origin || profile?.latitude == null || profile?.longitude == null) return null;
+
+  const lat1 = Number(origin.latitude);
+  const lon1 = Number(origin.longitude);
+  const lat2 = Number(profile.latitude);
+  const lon2 = Number(profile.longitude);
+
+  if ([lat1, lon1, lat2, lon2].some((value) => Number.isNaN(value))) return null;
+
+  const toRad = (value) => (value * Math.PI) / 180;
+  const radius = 6371;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) *
+      Math.cos(toRad(lat2)) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return radius * c;
+}
+
+function withDistance(entity, distance) {
+  const json = entity.toJSON ? entity.toJSON() : entity;
+  return { ...json, distanceKm: distance };
+}
+
+function shuffleList(list) {
+  return [...list].sort(() => Math.random() - 0.5);
+}
+
 function parseJson(value, fallback = null) {
   if (value === undefined || value === null || value === "") return fallback;
   if (Array.isArray(value)) value = value[0];
@@ -288,30 +348,73 @@ async function generateOrderNumber() {
 
 router.get("/home", async (req, res) => {
   try {
-    const [ads, categories, popularProducts, restaurants] = await Promise.all([
+    const userLocation = await resolveRequestLocation(req);
+    const maxDistanceKm = toNumber(req.query.radiusKm, 10) || 10;
+
+    const [ads, categories, allRestaurants] = await Promise.all([
       Ads.findAll({ order: [["createdAt", "DESC"]], limit: 5 }),
       Category.findAll({
-        where: { isActive: true, parentId: null },
+        where: { isActive: true, parentId: null, type: "food" },
         order: [["sortOrder", "ASC"], ["createdAt", "DESC"]],
         limit: 12,
-      }),
-      Product.findAll({
-        where: { isAvailable: true, isPopular: true },
-        include: [
-          { model: Category, as: "category" },
-          { model: User, as: "seller", attributes: { exclude: ["password"] }, include: [{ model: RestaurantProfile, as: "restaurantProfile" }] },
-        ],
-        order: [["rating", "DESC"], ["createdAt", "DESC"]],
-        limit: 10,
       }),
       User.findAll({
         where: { role: "restaurant", isVerified: true },
         attributes: { exclude: ["password"] },
         include: [{ model: RestaurantProfile, as: "restaurantProfile", where: { status: "active" } }],
         order: [["createdAt", "DESC"]],
-        limit: 10,
       }),
     ]);
+
+    const restaurantsWithDistance = allRestaurants
+      .map((restaurant) => ({
+        restaurant,
+        distance: distanceKm(userLocation, restaurant.restaurantProfile),
+      }))
+      .filter(({ distance }) => distance !== null && distance <= maxDistanceKm)
+      .sort((a, b) => (a.distance ?? 0) - (b.distance ?? 0));
+
+    const nearbyRestaurantIds = restaurantsWithDistance.map(({ restaurant }) => restaurant.id);
+
+    const nearbyProducts =
+      nearbyRestaurantIds.length === 0
+        ? []
+        : await Product.findAll({
+            where: { isAvailable: true, userId: { [Op.in]: nearbyRestaurantIds } },
+            include: [
+              { model: Category, as: "category" },
+              {
+                model: User,
+                as: "seller",
+                attributes: { exclude: ["password"] },
+                include: [{ model: RestaurantProfile, as: "restaurantProfile" }],
+              },
+              { model: OrderItem, as: "orderItems", attributes: ["quantity"] },
+            ],
+            order: [["createdAt", "DESC"]],
+          });
+
+    const productsWithOrderCount = nearbyProducts.map((product) => {
+      const json = product.toJSON ? product.toJSON() : product;
+      const orderCount = (json.orderItems || []).reduce(
+        (sum, item) => sum + Number(item.quantity || 0),
+        0
+      );
+      const sellerDistance = restaurantsWithDistance.find(
+        ({ restaurant }) => Number(restaurant.id) === Number(json.userId)
+      )?.distance;
+      return { ...json, orderCount, distanceKm: sellerDistance };
+    });
+
+    const orderedProducts = productsWithOrderCount.filter((product) => product.orderCount > 0);
+    const popularProducts = (orderedProducts.length > 0
+      ? orderedProducts.sort((a, b) => b.orderCount - a.orderCount)
+      : shuffleList(productsWithOrderCount)
+    ).slice(0, 10);
+
+    const restaurants = restaurantsWithDistance
+      .slice(0, 10)
+      .map(({ restaurant, distance }) => withDistance(restaurant, distance));
 
     return res.json({ ads, categories, popularProducts, restaurants });
   } catch (error) {
