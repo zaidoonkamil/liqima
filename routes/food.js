@@ -9,6 +9,7 @@ const {
   Category,
   Product,
   ProductAddon,
+  Favorite,
   Order,
   OrderItem,
   RestaurantProfile,
@@ -178,6 +179,7 @@ async function getRestaurantDashboard(restaurantId) {
     restaurant,
     products,
     categories,
+    generalAddons,
     deliveries,
     todayOrders,
     allOrders,
@@ -204,6 +206,10 @@ async function getRestaurantDashboard(restaurantId) {
         },
       ],
       order: [["sortOrder", "ASC"], ["createdAt", "DESC"]],
+    }),
+    ProductAddon.findAll({
+      where: { restaurantId, productId: null },
+      order: [["createdAt", "DESC"]],
     }),
     User.findAll({
       where: { role: "delivery" },
@@ -240,6 +246,7 @@ async function getRestaurantDashboard(restaurantId) {
     },
     products,
     categories,
+    generalAddons,
     deliveries,
   };
 }
@@ -1036,7 +1043,27 @@ router.get("/products/:id", async (req, res) => {
     });
 
     if (!product) return res.status(404).json({ error: "Product not found" });
-    return res.json(product);
+    const userId = toNumber(req.query.userId);
+    const [globalAddons, favorite] = await Promise.all([
+      ProductAddon.findAll({
+        where: {
+          restaurantId: product.userId,
+          productId: null,
+          isAvailable: true,
+        },
+        order: [["createdAt", "DESC"]],
+      }),
+      userId
+        ? Favorite.findOne({ where: { userId, productId: product.id } })
+        : Promise.resolve(null),
+    ]);
+
+    const json = product.toJSON ? product.toJSON() : product;
+    return res.json({
+      ...json,
+      globalAddons,
+      isFavorite: Boolean(favorite),
+    });
   } catch (error) {
     console.error("Product details error:", error);
     return res.status(500).json({ error: "Internal Server Error" });
@@ -1105,6 +1132,7 @@ router.post("/products/:id/addons", uploadImage.array("images", 1), async (req, 
 
     const addon = await ProductAddon.create({
       productId: product.id,
+      restaurantId: product.userId,
       name: req.body.name,
       price: toNumber(req.body.price, 0),
       image: req.files?.[0]?.filename || req.body.image || null,
@@ -1114,6 +1142,79 @@ router.post("/products/:id/addons", uploadImage.array("images", 1), async (req, 
     return res.status(201).json(addon);
   } catch (error) {
     console.error("Create addon error:", error);
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+router.get("/restaurants/:restaurantId/general-addons", async (req, res) => {
+  try {
+    const restaurantId = toNumber(req.params.restaurantId);
+    const addons = await ProductAddon.findAll({
+      where: { restaurantId, productId: null },
+      order: [["createdAt", "DESC"]],
+    });
+    return res.json(addons);
+  } catch (error) {
+    console.error("General addons error:", error);
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+router.post("/restaurants/:restaurantId/general-addons", uploadImage.array("images", 1), async (req, res) => {
+  try {
+    const restaurantId = toNumber(req.params.restaurantId);
+    const restaurant = await User.findOne({ where: { id: restaurantId, role: "restaurant" } });
+    if (!restaurant) return res.status(404).json({ error: "Restaurant not found" });
+    if (!req.body.name) return res.status(400).json({ error: "name is required" });
+
+    const addon = await ProductAddon.create({
+      productId: null,
+      restaurantId,
+      name: req.body.name,
+      price: toNumber(req.body.price, 0),
+      image: req.files?.[0]?.filename || req.body.image || null,
+      isAvailable: toBool(req.body.isAvailable, true),
+    });
+
+    return res.status(201).json(addon);
+  } catch (error) {
+    console.error("Create general addon error:", error);
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+router.patch("/restaurants/:restaurantId/general-addons/:addonId", uploadImage.array("images", 1), async (req, res) => {
+  try {
+    const restaurantId = toNumber(req.params.restaurantId);
+    const addon = await ProductAddon.findOne({
+      where: { id: req.params.addonId, restaurantId, productId: null },
+    });
+    if (!addon) return res.status(404).json({ error: "Addon not found" });
+
+    if (req.body.name !== undefined) addon.name = req.body.name;
+    if (req.body.price !== undefined) addon.price = toNumber(req.body.price, 0);
+    if (req.body.isAvailable !== undefined) addon.isAvailable = toBool(req.body.isActive ?? req.body.isAvailable, true);
+    if (req.files?.[0]) addon.image = req.files[0].filename;
+    if (req.body.image !== undefined && !req.files?.[0]) addon.image = req.body.image || null;
+
+    await addon.save();
+    return res.json(addon);
+  } catch (error) {
+    console.error("Update general addon error:", error);
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+router.delete("/restaurants/:restaurantId/general-addons/:addonId", async (req, res) => {
+  try {
+    const restaurantId = toNumber(req.params.restaurantId);
+    const deleted = await ProductAddon.destroy({
+      where: { id: req.params.addonId, restaurantId, productId: null },
+    });
+    if (!deleted) return res.status(404).json({ error: "Addon not found" });
+    return res.json({ message: "Addon deleted successfully" });
+  } catch (error) {
+    console.error("Delete general addon error:", error);
     return res.status(500).json({ error: "Internal Server Error" });
   }
 });

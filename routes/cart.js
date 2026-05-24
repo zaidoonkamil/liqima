@@ -101,14 +101,20 @@ async function normalizeSelectedAddons(productId, value, transaction = null) {
   const selectedAddons = parseJson(value, []);
   if (!Array.isArray(selectedAddons) || selectedAddons.length === 0) return [];
 
+  const product = await Product.findByPk(productId, { transaction });
+  if (!product) throw new Error("Product not found or unavailable");
+
   const addonIds = selectedAddons.map((addon) => toNumber(addon.id)).filter(Boolean);
   if (addonIds.length === 0) return selectedAddons;
 
   const addons = await ProductAddon.findAll({
     where: {
       id: { [Op.in]: addonIds },
-      productId,
       isAvailable: true,
+      [Op.or]: [
+        { productId },
+        { productId: null, restaurantId: product.userId },
+      ],
     },
     transaction,
   });

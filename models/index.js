@@ -75,6 +75,8 @@ DeliveryProfile.belongsTo(User, { foreignKey: "restaurantId", as: "restaurant", 
 
 Product.hasMany(ProductAddon, { foreignKey: "productId", as: "addons", onDelete: "CASCADE" });
 ProductAddon.belongsTo(Product, { foreignKey: "productId", as: "product", onDelete: "CASCADE" });
+User.hasMany(ProductAddon, { foreignKey: "restaurantId", as: "generalAddons", onDelete: "CASCADE" });
+ProductAddon.belongsTo(User, { foreignKey: "restaurantId", as: "restaurant", onDelete: "CASCADE" });
 
 User.belongsToMany(Product, { through: Favorite, foreignKey: "userId", as: "favoriteProducts" , onDelete: 'CASCADE' });
 Product.belongsToMany(User, { through: Favorite, foreignKey: "productId", as: "favoritedByUsers", onDelete: 'CASCADE' });

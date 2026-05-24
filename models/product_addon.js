@@ -9,7 +9,11 @@ const ProductAddon = sequelize.define("ProductAddon", {
   },
   productId: {
     type: DataTypes.INTEGER,
-    allowNull: false,
+    allowNull: true,
+  },
+  restaurantId: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
   },
   name: {
     type: DataTypes.STRING,
