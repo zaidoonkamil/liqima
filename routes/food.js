@@ -362,6 +362,7 @@ async function generateOrderNumber() {
 router.get("/home", async (req, res) => {
   try {
     const userLocation = await resolveRequestLocation(req);
+    const userId = toNumber(req.query.userId);
     const maxDistanceKm = toNumber(req.query.radiusKm, 10) || 10;
 
     const [ads, categories, allRestaurants] = await Promise.all([
@@ -428,6 +429,37 @@ router.get("/home", async (req, res) => {
     const restaurants = restaurantsWithDistance
       .slice(0, 10)
       .map(({ restaurant, distance }) => withDistance(restaurant, distance));
+
+    if (userId) {
+      const [productFavorites, restaurantFavorites] = await Promise.all([
+        Favorite.findAll({
+          where: {
+            userId,
+            productId: { [Op.in]: popularProducts.map((product) => product.id) },
+          },
+          attributes: ["productId"],
+          raw: true,
+        }),
+        RestaurantFavorite.findAll({
+          where: {
+            userId,
+            restaurantId: { [Op.in]: restaurants.map((restaurant) => restaurant.id) },
+          },
+          attributes: ["restaurantId"],
+          raw: true,
+        }),
+      ]);
+
+      const favoriteProductIds = new Set(productFavorites.map((item) => Number(item.productId)));
+      const favoriteRestaurantIds = new Set(restaurantFavorites.map((item) => Number(item.restaurantId)));
+
+      popularProducts.forEach((product) => {
+        product.isFavorite = favoriteProductIds.has(Number(product.id));
+      });
+      restaurants.forEach((restaurant) => {
+        restaurant.isFavorite = favoriteRestaurantIds.has(Number(restaurant.id));
+      });
+    }
 
     return res.json({ ads, categories, popularProducts, restaurants });
   } catch (error) {
@@ -637,7 +669,16 @@ router.get("/restaurants", async (req, res) => {
       include: restaurantInclude(),
       order: [["createdAt", "DESC"]],
     });
-    return res.json(restaurants);
+    return res.json(
+      restaurants.map((restaurant) => {
+        const json = restaurant.toJSON ? restaurant.toJSON() : restaurant;
+        return {
+          ...json,
+          rating: Number(json.restaurantProfile?.rating || json.rating || 0),
+          ratingsCount: Number(json.restaurantProfile?.ratingsCount || json.ratingsCount || 0),
+        };
+      })
+    );
   } catch (error) {
     console.error("Restaurants error:", error);
     return res.status(500).json({ error: "Internal Server Error" });
