@@ -212,7 +212,9 @@ router.get("/coupons", async (req, res) => {
     const where = {};
     if (req.query.categoryId) where.couponCategoryId = req.query.categoryId;
     if (req.query.type) where.type = req.query.type;
-    if (req.query.active !== undefined) where.isActive = toBool(req.query.active, true);
+    if (req.query.active !== undefined && req.query.active !== "all") {
+      where.isActive = toBool(req.query.active, true);
+    }
 
     const coupons = await Coupon.findAll({
       where,
@@ -237,6 +239,7 @@ router.get("/users/:userId/coupons", async (req, res) => {
         [Op.or]: [
           { target: "all" },
           { target: "user", targetUserId: userId },
+          { target: "restaurant" },
         ],
       },
       include: couponInclude(),
