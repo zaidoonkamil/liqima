@@ -11,6 +11,41 @@ const {
 
 const router = express.Router();
 
+const productAttributes = [
+  "id",
+  "userId",
+  "categoryId",
+  "name",
+  "description",
+  "images",
+  "price",
+  "discountPrice",
+  "rating",
+  "ratingsCount",
+  "isAvailable",
+];
+
+const restaurantProfileAttributes = [
+  "id",
+  "userId",
+  "logo",
+  "coverImage",
+  "description",
+  "area",
+  "cuisineTypes",
+  "deliveryTimeMin",
+  "deliveryTimeMax",
+  "minimumOrder",
+  "rating",
+  "ratingsCount",
+  "freeDelivery",
+  "status",
+  "isOpen",
+];
+
+const categoryAttributes = ["id", "name", "image"];
+const addonAttributes = ["id", "productId", "name", "price", "image", "isAvailable"];
+
 function toNumber(value, fallback = null) {
   if (value === undefined || value === null || value === "") return fallback;
   const parsed = Number(value);
@@ -22,14 +57,21 @@ function productInclude() {
     {
       model: Product,
       as: "product",
+      attributes: productAttributes,
       include: [
-        { model: Category, as: "category" },
-        { model: ProductAddon, as: "addons" },
+        { model: Category, as: "category", attributes: categoryAttributes },
+        { model: ProductAddon, as: "addons", attributes: addonAttributes },
         {
           model: User,
           as: "seller",
           attributes: { exclude: ["password"] },
-          include: [{ model: RestaurantProfile, as: "restaurantProfile" }],
+          include: [
+            {
+              model: RestaurantProfile,
+              as: "restaurantProfile",
+              attributes: restaurantProfileAttributes,
+            },
+          ],
         },
       ],
     },
@@ -43,11 +85,18 @@ function restaurantInclude() {
       as: "restaurant",
       attributes: { exclude: ["password"] },
       include: [
-        { model: RestaurantProfile, as: "restaurantProfile" },
+        {
+          model: RestaurantProfile,
+          as: "restaurantProfile",
+          attributes: restaurantProfileAttributes,
+        },
         {
           model: Product,
           as: "products",
-          include: [{ model: Category, as: "category" }],
+          attributes: productAttributes,
+          include: [
+            { model: Category, as: "category", attributes: categoryAttributes },
+          ],
         },
       ],
     },
