@@ -116,6 +116,41 @@ async function getBasket(userId, transaction = null) {
   });
 }
 
+async function mergeDuplicateBasketItems(basket, transaction = null) {
+  const items = basket?.items || [];
+  const itemByKey = new Map();
+  let changed = false;
+
+  for (const item of items) {
+    const key = [
+      item.productId,
+      item.selectedSize || "",
+      item.selectedColor || "",
+    ].join(":");
+    const existing = itemByKey.get(key);
+    if (!existing) {
+      itemByKey.set(key, item);
+      continue;
+    }
+
+    existing.quantity += item.quantity;
+    const addonsById = new Map();
+    for (const addon of parseJson(existing.selectedAddons, []) || []) {
+      addonsById.set(toNumber(addon.id), addon);
+    }
+    for (const addon of parseJson(item.selectedAddons, []) || []) {
+      addonsById.set(toNumber(addon.id), addon);
+    }
+    existing.selectedAddons = [...addonsById.values()].filter((addon) => addon?.id);
+    await existing.save({ transaction });
+    await item.destroy({ transaction });
+    changed = true;
+  }
+
+  if (!changed) return basket;
+  return getBasket(basket.userId, transaction);
+}
+
 function getSelectedAddonsTotal(item) {
   const selectedAddons = parseJson(item.selectedAddons, []);
   if (!Array.isArray(selectedAddons)) return 0;
@@ -265,7 +300,7 @@ function calculateBasketSummary(basket, coupon = null, deliveryLocation = null) 
     freeDelivery: deliveryFee === 0,
     deliveryPolicy,
     remainingToMinimumOrder: Math.max(minimumOrder - subtotal, 0),
-    canCheckout: items.length > 0 && subtotal >= minimumOrder,
+    canCheckout: items.length > 0,
   };
 }
 
@@ -353,7 +388,8 @@ router.get("/users/:userId/cart", async (req, res) => {
     const user = await User.findByPk(userId);
     if (!user) return res.status(404).json({ error: "User not found" });
 
-    const basket = await getBasket(userId);
+    let basket = await getBasket(userId);
+    basket = await mergeDuplicateBasketItems(basket);
     return res.json(formatCart(basket, null, user));
   } catch (error) {
     console.error("Cart error:", error);
@@ -415,12 +451,19 @@ router.post("/users/:userId/cart/items", async (req, res) => {
       },
       transaction,
     });
-    const existing = similarItems.find(
-      (item) => JSON.stringify(item.selectedAddons || []) === JSON.stringify(selectedAddons || [])
-    );
+    const existing = similarItems[0] || null;
 
     if (existing) {
       existing.quantity += quantity;
+      const currentAddons = parseJson(existing.selectedAddons, []);
+      const addonsById = new Map();
+      for (const addon of Array.isArray(currentAddons) ? currentAddons : []) {
+        addonsById.set(toNumber(addon.id), addon);
+      }
+      for (const addon of selectedAddons) {
+        addonsById.set(toNumber(addon.id), addon);
+      }
+      existing.selectedAddons = [...addonsById.values()].filter((addon) => addon?.id);
       await existing.save({ transaction });
     } else {
       await BasketItem.create({
@@ -583,11 +626,7 @@ router.post("/users/:userId/checkout", async (req, res) => {
     }
     if (!summary.canCheckout) {
       await transaction.rollback();
-      return res.status(400).json({
-        error: "Order subtotal is less than restaurant minimum",
-        minimumOrder: summary.minimumOrder,
-        remainingToMinimumOrder: summary.remainingToMinimumOrder,
-      });
+      return res.status(400).json({ error: "Cart is empty" });
     }
 
     let coupon = null;
