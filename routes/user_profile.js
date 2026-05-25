@@ -202,6 +202,8 @@ router.post("/users/:userId/addresses", async (req, res) => {
       title: req.body.title || null,
       addressText,
       details: req.body.details || null,
+      latitude: toNumber(req.body.latitude),
+      longitude: toNumber(req.body.longitude),
       isDefault,
     }, { transaction });
 
@@ -241,6 +243,8 @@ router.patch("/users/:userId/addresses/:id", async (req, res) => {
     if (req.body.title !== undefined) address.title = req.body.title || null;
     if (req.body.addressText !== undefined) address.addressText = String(req.body.addressText || "").trim();
     if (req.body.details !== undefined) address.details = req.body.details || null;
+    if (req.body.latitude !== undefined) address.latitude = toNumber(req.body.latitude);
+    if (req.body.longitude !== undefined) address.longitude = toNumber(req.body.longitude);
 
     const shouldBeDefault = req.body.isDefault === true || req.body.isDefault === "true";
     if (shouldBeDefault) {

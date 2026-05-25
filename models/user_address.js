@@ -28,6 +28,14 @@ const UserAddress = sequelize.define("UserAddress", {
     type: DataTypes.TEXT,
     allowNull: true,
   },
+  latitude: {
+    type: DataTypes.FLOAT,
+    allowNull: true,
+  },
+  longitude: {
+    type: DataTypes.FLOAT,
+    allowNull: true,
+  },
   isDefault: {
     type: DataTypes.BOOLEAN,
     allowNull: false,

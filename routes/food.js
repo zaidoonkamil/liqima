@@ -10,6 +10,7 @@ const {
   Product,
   ProductAddon,
   Favorite,
+  RestaurantFavorite,
   Order,
   OrderItem,
   RestaurantProfile,
@@ -88,7 +89,12 @@ function distanceKm(origin, profile) {
 
 function withDistance(entity, distance) {
   const json = entity.toJSON ? entity.toJSON() : entity;
-  return { ...json, distanceKm: distance };
+  return {
+    ...json,
+    rating: Number(json.restaurantProfile?.rating || json.rating || 0),
+    ratingsCount: Number(json.restaurantProfile?.ratingsCount || json.ratingsCount || 0),
+    distanceKm: distance,
+  };
 }
 
 function shuffleList(list) {
@@ -242,7 +248,7 @@ async function getRestaurantDashboard(restaurantId) {
       productsCount: products.length,
       categoriesCount: categories.length,
       deliveriesCount: deliveries.length,
-      rating: Number(restaurant.rating || restaurant.restaurantProfile?.rating || 0),
+      rating: Number(restaurant.restaurantProfile?.rating || restaurant.rating || 0),
     },
     products,
     categories,
@@ -603,6 +609,8 @@ router.post(
       minimumOrder: toNumber(req.body.minimumOrder, 0),
       discountPercent: toNumber(req.body.discountPercent, 0),
       discountMinOrder: toNumber(req.body.discountMinOrder, 0),
+      rating: toNumber(req.body.rating, 0),
+      ratingsCount: toNumber(req.body.ratingsCount, 0),
       isOpen: toBool(req.body.isOpen, true),
       openingTime: toText(req.body.openingTime),
       closingTime: toText(req.body.closingTime),
@@ -638,6 +646,8 @@ router.get("/restaurants", async (req, res) => {
 
 router.get("/restaurants/:id", async (req, res) => {
   try {
+    const userLocation = await resolveRequestLocation(req);
+    const userId = toNumber(req.query.userId);
     const restaurant = await User.findOne({
       where: { id: req.params.id, role: "restaurant" },
       attributes: { exclude: ["password"] },
@@ -645,7 +655,19 @@ router.get("/restaurants/:id", async (req, res) => {
     });
 
     if (!restaurant) return res.status(404).json({ error: "Restaurant not found" });
-    return res.json(restaurant);
+
+    const json = restaurant.toJSON();
+    const isFavorite = userId
+      ? Boolean(await RestaurantFavorite.findOne({ where: { userId, restaurantId: restaurant.id } }))
+      : false;
+
+    return res.json({
+      ...json,
+      rating: Number(json.restaurantProfile?.rating || json.rating || 0),
+      ratingsCount: Number(json.restaurantProfile?.ratingsCount || json.ratingsCount || 0),
+      distanceKm: distanceKm(userLocation, json.restaurantProfile),
+      isFavorite,
+    });
   } catch (error) {
     console.error("Restaurant details error:", error);
     return res.status(500).json({ error: "Internal Server Error" });
@@ -750,6 +772,14 @@ router.patch(
           req.body.discountMinOrder === undefined
             ? currentProfile?.discountMinOrder || 0
             : toNumber(req.body.discountMinOrder, 0),
+        rating:
+          req.body.rating === undefined
+            ? currentProfile?.rating || 0
+            : toNumber(req.body.rating, 0),
+        ratingsCount:
+          req.body.ratingsCount === undefined
+            ? currentProfile?.ratingsCount || 0
+            : toNumber(req.body.ratingsCount, 0),
         isOpen:
           req.body.isOpen === undefined
             ? currentProfile?.isOpen ?? true

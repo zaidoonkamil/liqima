@@ -296,6 +296,8 @@ async function ensureUserAddressesTable(queryInterface) {
     title: { type: DataTypes.STRING, allowNull: true },
     addressText: { type: DataTypes.TEXT, allowNull: false },
     details: { type: DataTypes.TEXT, allowNull: true },
+    latitude: { type: DataTypes.FLOAT, allowNull: true },
+    longitude: { type: DataTypes.FLOAT, allowNull: true },
     isDefault: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
     createdAt: { type: DataTypes.DATE, allowNull: false, defaultValue: DataTypes.NOW },
     updatedAt: { type: DataTypes.DATE, allowNull: false, defaultValue: DataTypes.NOW },
@@ -391,6 +393,15 @@ async function ensureSchema(sequelize) {
     type: DataTypes.FLOAT,
     allowNull: false,
     defaultValue: 0,
+  });
+
+  await ensureColumn(queryInterface, "UserAddresses", "latitude", {
+    type: DataTypes.FLOAT,
+    allowNull: true,
+  });
+  await ensureColumn(queryInterface, "UserAddresses", "longitude", {
+    type: DataTypes.FLOAT,
+    allowNull: true,
   });
 
   await ensureColumn(queryInterface, "Coupons", "couponCategoryId", {
