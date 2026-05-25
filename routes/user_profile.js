@@ -1,5 +1,8 @@
 const express = require("express");
+const bcrypt = require("bcrypt");
+const { Op } = require("sequelize");
 const sequelize = require("../config/db");
+const uploadImage = require("../middlewares/uploads");
 const {
   User,
   UserAddress,
@@ -7,11 +10,14 @@ const {
   Order,
   Favorite,
   RestaurantFavorite,
+  Coupon,
   CouponUsage,
 } = require("../models");
+const { normalizePhone } = require("../services/otpService");
 
 const router = express.Router();
 const ADDRESS_TYPES = ["home", "work", "other"];
+const saltRounds = 10;
 
 function toNumber(value, fallback = null) {
   if (value === undefined || value === null || value === "") return fallback;
@@ -27,6 +33,11 @@ function publicUser(user) {
   const json = user.toJSON ? user.toJSON() : user;
   delete json.password;
   return json;
+}
+
+function getUploadedFile(req, fieldName, fallbackIndex = 0) {
+  if (Array.isArray(req.files)) return req.files[fallbackIndex]?.filename || null;
+  return req.files?.[fieldName]?.[0]?.filename || req.files?.images?.[fallbackIndex]?.filename || null;
 }
 
 async function refreshUserRating(userId, transaction = null) {
@@ -54,6 +65,61 @@ async function refreshUserRating(userId, transaction = null) {
   return { rating: Number(rating.toFixed(1)), ratingsCount };
 }
 
+async function getAvailableCouponsCount(userId) {
+  const now = new Date();
+  const coupons = await Coupon.findAll({
+    where: {
+      isActive: true,
+      [Op.and]: [
+        {
+          [Op.or]: [
+            { startsAt: null },
+            { startsAt: { [Op.lte]: now } },
+          ],
+        },
+        {
+          [Op.or]: [
+            { expiresAt: null },
+            { expiresAt: { [Op.gte]: now } },
+          ],
+        },
+        {
+          [Op.or]: [
+            { totalUsageLimit: null },
+            sequelize.where(sequelize.col("usedCount"), "<", sequelize.col("totalUsageLimit")),
+          ],
+        },
+        {
+          [Op.or]: [
+            { target: "all" },
+            { target: "user", targetUserId: userId },
+          ],
+        },
+      ],
+    },
+  });
+
+  if (coupons.length === 0) return 0;
+
+  const usageRows = await CouponUsage.findAll({
+    where: { userId },
+    attributes: ["couponId", [sequelize.fn("COUNT", sequelize.col("id")), "count"]],
+    group: ["couponId"],
+    raw: true,
+  });
+
+  const usageMap = usageRows.reduce((result, row) => {
+    result[row.couponId] = Number(row.count);
+    return result;
+  }, {});
+
+  return coupons.filter((coupon) => {
+    const json = coupon.toJSON ? coupon.toJSON() : coupon;
+    const usageCount = usageMap[json.id] || 0;
+    return usageCount < (json.perUserLimit || 1);
+  }).length;
+}
+
 router.get("/users/:id/info", async (req, res) => {
   try {
     const user = await User.findByPk(req.params.id, {
@@ -67,7 +133,7 @@ router.get("/users/:id/info", async (req, res) => {
       Order.count({ where: { userId: user.id } }),
       Favorite.count({ where: { userId: user.id } }),
       RestaurantFavorite.count({ where: { userId: user.id } }),
-      CouponUsage.count({ where: { userId: user.id } }),
+      getAvailableCouponsCount(user.id),
     ]);
 
     return res.json({
@@ -90,6 +156,61 @@ router.get("/users/:id/info", async (req, res) => {
     return res.status(500).json({ error: "Internal Server Error" });
   }
 });
+
+router.patch(
+  "/users/:id/profile",
+  uploadImage.fields([
+    { name: "image", maxCount: 1 },
+    { name: "images", maxCount: 1 },
+  ]),
+  async (req, res) => {
+    try {
+      const userId = toNumber(req.params.id);
+      const user = await User.findByPk(userId);
+
+      if (!user) return res.status(404).json({ error: "User not found" });
+
+      const name = String(req.body.name || "").trim();
+      const phone = normalizePhone(req.body.phone);
+      const password = String(req.body.password || "").trim();
+
+      if (!name || !phone) {
+        return res.status(400).json({ error: "name and phone are required" });
+      }
+
+      const existingPhone = await User.findOne({
+        where: {
+          phone,
+          id: { [Op.ne]: user.id },
+        },
+      });
+
+      if (existingPhone) {
+        return res.status(400).json({ error: "Phone number is already in use" });
+      }
+
+      user.name = name;
+      user.phone = phone;
+
+      if (password) {
+        if (password.length < 6) {
+          return res.status(400).json({ error: "Password must be at least 6 characters" });
+        }
+        user.password = await bcrypt.hash(password, saltRounds);
+      }
+
+      const image = getUploadedFile(req, "image", 0);
+      if (image) user.image = image;
+
+      await user.save();
+
+      return res.json({ user: publicUser(user) });
+    } catch (error) {
+      console.error("Update user profile error:", error);
+      return res.status(500).json({ error: "Internal Server Error" });
+    }
+  }
+);
 
 router.post("/users/:id/rating", async (req, res) => {
   const transaction = await sequelize.transaction();
