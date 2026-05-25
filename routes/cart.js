@@ -26,6 +26,31 @@ function toNumber(value, fallback = null) {
   return Number.isNaN(parsed) ? fallback : parsed;
 }
 
+function toRadians(value) {
+  return (value * Math.PI) / 180;
+}
+
+function getDistanceKm(origin, destination) {
+  if (!origin || !destination) return null;
+  const lat1 = toNumber(origin.latitude);
+  const lon1 = toNumber(origin.longitude);
+  const lat2 = toNumber(destination.latitude);
+  const lon2 = toNumber(destination.longitude);
+  if (lat1 === null || lon1 === null || lat2 === null || lon2 === null) return null;
+
+  const earthRadiusKm = 6371;
+  const dLat = toRadians(lat2 - lat1);
+  const dLon = toRadians(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRadians(lat1)) *
+      Math.cos(toRadians(lat2)) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return Number((earthRadiusKm * c).toFixed(2));
+}
+
 function parseJson(value, fallback = null) {
   if (value === undefined || value === null || value === "") return fallback;
   if (Array.isArray(value) || typeof value === "object") return value;
@@ -176,7 +201,32 @@ function normalizeSelectedSize(product, selectedSize) {
   };
 }
 
-function calculateBasketSummary(basket, coupon = null) {
+function calculateDeliveryPolicy(profile, deliveryLocation = null) {
+  const restaurantLocation = {
+    latitude: profile?.latitude,
+    longitude: profile?.longitude,
+  };
+  const distanceKm = getDistanceKm(deliveryLocation, restaurantLocation);
+  const freeDeliveryDistanceKm = Math.max(toNumber(profile?.freeDeliveryDistanceKm, 0), 0);
+  const deliveryPricePerKm = Math.max(toNumber(profile?.deliveryPricePerKm, 0), 0);
+  const appDeliveryFee = Math.max(toNumber(profile?.appDeliveryFee, toNumber(profile?.deliveryFee, 0)), 0);
+  const extraKm = distanceKm === null ? 0 : Math.max(distanceKm - freeDeliveryDistanceKm, 0);
+  const restaurantDeliveryFee = Math.ceil(extraKm) * deliveryPricePerKm;
+  const deliveryFee = appDeliveryFee + restaurantDeliveryFee;
+
+  return {
+    deliveryFee,
+    deliveryFeeBeforeDiscount: deliveryFee,
+    restaurantDeliveryFee,
+    appDeliveryFee,
+    deliveryDistanceKm: distanceKm,
+    freeDeliveryDistanceKm,
+    deliveryPricePerKm,
+    withinFreeDeliveryDistance: distanceKm !== null && distanceKm <= freeDeliveryDistanceKm,
+  };
+}
+
+function calculateBasketSummary(basket, coupon = null, deliveryLocation = null) {
   const items = basket?.items || [];
   let subtotal = 0;
   let itemsCount = 0;
@@ -191,9 +241,9 @@ function calculateBasketSummary(basket, coupon = null) {
   const restaurant = items[0]?.product?.seller || null;
   const restaurantProfile = restaurant?.restaurantProfile || null;
   const minimumOrder = toNumber(restaurantProfile?.minimumOrder, 0);
-  const deliveryFeeBeforeDiscount = toNumber(restaurantProfile?.deliveryFee, 0);
-  const freeDelivery = Boolean(restaurantProfile?.freeDelivery);
-  let deliveryFee = freeDelivery ? 0 : deliveryFeeBeforeDiscount;
+  const deliveryPolicy = calculateDeliveryPolicy(restaurantProfile, deliveryLocation);
+  const deliveryFeeBeforeDiscount = deliveryPolicy.deliveryFeeBeforeDiscount;
+  let deliveryFee = deliveryPolicy.deliveryFee;
   let discountAmount = 0;
 
   if (coupon) {
@@ -212,7 +262,8 @@ function calculateBasketSummary(basket, coupon = null) {
     total,
     restaurant,
     minimumOrder,
-    freeDelivery,
+    freeDelivery: deliveryFee === 0,
+    deliveryPolicy,
     remainingToMinimumOrder: Math.max(minimumOrder - subtotal, 0),
     canCheckout: items.length > 0 && subtotal >= minimumOrder,
   };
@@ -269,8 +320,8 @@ async function generateOrderNumber() {
   return String(Date.now()).slice(-8);
 }
 
-function formatCart(basket, coupon = null) {
-  const summary = calculateBasketSummary(basket, coupon);
+function formatCart(basket, coupon = null, deliveryLocation = null) {
+  const summary = calculateBasketSummary(basket, coupon, deliveryLocation);
   return {
     basket,
     summary: {
@@ -283,6 +334,12 @@ function formatCart(basket, coupon = null) {
       minimumOrder: summary.minimumOrder,
       remainingToMinimumOrder: summary.remainingToMinimumOrder,
       freeDelivery: summary.freeDelivery,
+      restaurantDeliveryFee: summary.deliveryPolicy.restaurantDeliveryFee,
+      appDeliveryFee: summary.deliveryPolicy.appDeliveryFee,
+      deliveryDistanceKm: summary.deliveryPolicy.deliveryDistanceKm,
+      freeDeliveryDistanceKm: summary.deliveryPolicy.freeDeliveryDistanceKm,
+      deliveryPricePerKm: summary.deliveryPolicy.deliveryPricePerKm,
+      withinFreeDeliveryDistance: summary.deliveryPolicy.withinFreeDeliveryDistance,
       canCheckout: summary.canCheckout,
       couponCode: coupon?.code || null,
     },
@@ -297,7 +354,7 @@ router.get("/users/:userId/cart", async (req, res) => {
     if (!user) return res.status(404).json({ error: "User not found" });
 
     const basket = await getBasket(userId);
-    return res.json(formatCart(basket));
+    return res.json(formatCart(basket, null, user));
   } catch (error) {
     console.error("Cart error:", error);
     return res.status(500).json({ error: "Internal Server Error" });
@@ -379,7 +436,7 @@ router.post("/users/:userId/cart/items", async (req, res) => {
     await transaction.commit();
 
     const updatedBasket = await getBasket(userId);
-    return res.status(201).json(formatCart(updatedBasket));
+    return res.status(201).json(formatCart(updatedBasket, null, user));
   } catch (error) {
     await transaction.rollback();
     console.error("Add cart item error:", error);
@@ -414,8 +471,11 @@ router.patch("/users/:userId/cart/items/:itemId", async (req, res) => {
     if (req.body.selectedColor !== undefined) item.selectedColor = req.body.selectedColor || null;
 
     await item.save();
-    const updatedBasket = await getBasket(userId);
-    return res.json(formatCart(updatedBasket));
+    const [updatedBasket, user] = await Promise.all([
+      getBasket(userId),
+      User.findByPk(userId),
+    ]);
+    return res.json(formatCart(updatedBasket, null, user));
   } catch (error) {
     console.error("Update cart item error:", error);
     if (
@@ -434,8 +494,11 @@ router.delete("/users/:userId/cart/items/:itemId", async (req, res) => {
     const basket = await getOrCreateBasket(userId);
     await BasketItem.destroy({ where: { id: req.params.itemId, basketId: basket.id } });
 
-    const updatedBasket = await getBasket(userId);
-    return res.json(formatCart(updatedBasket));
+    const [updatedBasket, user] = await Promise.all([
+      getBasket(userId),
+      User.findByPk(userId),
+    ]);
+    return res.json(formatCart(updatedBasket, null, user));
   } catch (error) {
     console.error("Delete cart item error:", error);
     return res.status(500).json({ error: "Internal Server Error" });
@@ -446,8 +509,11 @@ router.delete("/users/:userId/cart", async (req, res) => {
   try {
     const basket = await getOrCreateBasket(req.params.userId);
     await BasketItem.destroy({ where: { basketId: basket.id } });
-    const updatedBasket = await getBasket(req.params.userId);
-    return res.json(formatCart(updatedBasket));
+    const [updatedBasket, user] = await Promise.all([
+      getBasket(req.params.userId),
+      User.findByPk(req.params.userId),
+    ]);
+    return res.json(formatCart(updatedBasket, null, user));
   } catch (error) {
     console.error("Clear cart error:", error);
     return res.status(500).json({ error: "Internal Server Error" });
@@ -457,8 +523,11 @@ router.delete("/users/:userId/cart", async (req, res) => {
 router.post("/users/:userId/cart/apply-coupon", async (req, res) => {
   try {
     const userId = toNumber(req.params.userId);
-    const basket = await getBasket(userId);
-    const summary = calculateBasketSummary(basket);
+    const [basket, user] = await Promise.all([
+      getBasket(userId),
+      User.findByPk(userId),
+    ]);
+    const summary = calculateBasketSummary(basket, null, user);
 
     if (!summary.restaurant) return res.status(400).json({ error: "Cart is empty" });
 
@@ -471,7 +540,7 @@ router.post("/users/:userId/cart/apply-coupon", async (req, res) => {
     });
 
     if (validation.error) return res.status(400).json({ error: validation.error });
-    return res.json(formatCart(basket, validation.coupon));
+    return res.json(formatCart(basket, validation.coupon, user));
   } catch (error) {
     console.error("Apply cart coupon error:", error);
     return res.status(500).json({ error: "Internal Server Error" });
@@ -506,7 +575,8 @@ router.post("/users/:userId/checkout", async (req, res) => {
     }
 
     const basket = await getBasket(userId, transaction);
-    const summary = calculateBasketSummary(basket);
+    const deliveryLocation = address || user;
+    const summary = calculateBasketSummary(basket, null, deliveryLocation);
     if (!summary.restaurant) {
       await transaction.rollback();
       return res.status(400).json({ error: "Cart is empty" });
@@ -562,6 +632,8 @@ router.post("/users/:userId/checkout", async (req, res) => {
       address: address.addressText,
       addressDetails: address.details,
       notes: req.body.notes || null,
+      latitude: toNumber(address.latitude),
+      longitude: toNumber(address.longitude),
     }, { transaction });
 
     const orderItems = basket.items.map((item) => {

@@ -57,6 +57,21 @@ const RestaurantProfile = sequelize.define("RestaurantProfile", {
     allowNull: false,
     defaultValue: 0,
   },
+  freeDeliveryDistanceKm: {
+    type: DataTypes.FLOAT,
+    allowNull: false,
+    defaultValue: 0,
+  },
+  deliveryPricePerKm: {
+    type: DataTypes.FLOAT,
+    allowNull: false,
+    defaultValue: 0,
+  },
+  appDeliveryFee: {
+    type: DataTypes.FLOAT,
+    allowNull: false,
+    defaultValue: 0,
+  },
   minimumOrder: {
     type: DataTypes.FLOAT,
     allowNull: false,

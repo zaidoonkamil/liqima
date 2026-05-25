@@ -87,6 +87,28 @@ function distanceKm(origin, profile) {
   return radius * c;
 }
 
+function calculateDeliveryPolicyFromDistance(profile, distance = null) {
+  const freeDeliveryDistanceKm = Math.max(toNumber(profile?.freeDeliveryDistanceKm, 0), 0);
+  const deliveryPricePerKm = Math.max(toNumber(profile?.deliveryPricePerKm, 0), 0);
+  const appDeliveryFee = Math.max(toNumber(profile?.appDeliveryFee, toNumber(profile?.deliveryFee, 0)), 0);
+  const extraKm = distance === null ? 0 : Math.max(distance - freeDeliveryDistanceKm, 0);
+  const restaurantDeliveryFee = Math.ceil(extraKm) * deliveryPricePerKm;
+
+  return {
+    deliveryFee: appDeliveryFee + restaurantDeliveryFee,
+    restaurantDeliveryFee,
+    appDeliveryFee,
+    deliveryDistanceKm: distance === null ? null : Number(distance.toFixed(2)),
+    freeDeliveryDistanceKm,
+    deliveryPricePerKm,
+    withinFreeDeliveryDistance: distance !== null && distance <= freeDeliveryDistanceKm,
+  };
+}
+
+function calculateDeliveryPolicy(profile, deliveryLocation = null) {
+  return calculateDeliveryPolicyFromDistance(profile, distanceKm(deliveryLocation, profile));
+}
+
 function withDistance(entity, distance) {
   const json = entity.toJSON ? entity.toJSON() : entity;
   return {
@@ -94,6 +116,9 @@ function withDistance(entity, distance) {
     rating: Number(json.restaurantProfile?.rating || json.rating || 0),
     ratingsCount: Number(json.restaurantProfile?.ratingsCount || json.ratingsCount || 0),
     distanceKm: distance,
+    deliveryPolicy: json.restaurantProfile
+      ? calculateDeliveryPolicyFromDistance(json.restaurantProfile, distance)
+      : null,
   };
 }
 
@@ -638,6 +663,9 @@ router.post(
       deliveryTimeMin: toNumber(req.body.deliveryTimeMin),
       deliveryTimeMax: toNumber(req.body.deliveryTimeMax),
       deliveryFee: toNumber(req.body.deliveryFee, 0),
+      freeDeliveryDistanceKm: toNumber(req.body.freeDeliveryDistanceKm, 0),
+      deliveryPricePerKm: toNumber(req.body.deliveryPricePerKm, 0),
+      appDeliveryFee: toNumber(req.body.appDeliveryFee, toNumber(req.body.deliveryFee, 0)),
       minimumOrder: toNumber(req.body.minimumOrder, 0),
       discountPercent: toNumber(req.body.discountPercent, 0),
       discountMinOrder: toNumber(req.body.discountMinOrder, 0),
@@ -707,6 +735,7 @@ router.get("/restaurants/:id", async (req, res) => {
       rating: Number(json.restaurantProfile?.rating || json.rating || 0),
       ratingsCount: Number(json.restaurantProfile?.ratingsCount || json.ratingsCount || 0),
       distanceKm: distanceKm(userLocation, json.restaurantProfile),
+      deliveryPolicy: calculateDeliveryPolicy(json.restaurantProfile, userLocation),
       isFavorite,
     });
   } catch (error) {
@@ -801,6 +830,18 @@ router.patch(
           req.body.deliveryFee === undefined
             ? currentProfile?.deliveryFee || 0
             : toNumber(req.body.deliveryFee, 0),
+        freeDeliveryDistanceKm:
+          req.body.freeDeliveryDistanceKm === undefined
+            ? currentProfile?.freeDeliveryDistanceKm || 0
+            : toNumber(req.body.freeDeliveryDistanceKm, 0),
+        deliveryPricePerKm:
+          req.body.deliveryPricePerKm === undefined
+            ? currentProfile?.deliveryPricePerKm || 0
+            : toNumber(req.body.deliveryPricePerKm, 0),
+        appDeliveryFee:
+          req.body.appDeliveryFee === undefined
+            ? currentProfile?.appDeliveryFee || 0
+            : toNumber(req.body.appDeliveryFee, 0),
         minimumOrder:
           req.body.minimumOrder === undefined
             ? currentProfile?.minimumOrder || 0
@@ -1405,7 +1446,14 @@ router.post("/orders", async (req, res) => {
 
     const restaurant = products[0].seller;
     const restaurantProfile = restaurant?.restaurantProfile;
-    const deliveryFee = toNumber(req.body.deliveryFee, restaurantProfile?.deliveryFee || 0);
+    const deliveryLocation = {
+      latitude: toNumber(req.body.latitude),
+      longitude: toNumber(req.body.longitude),
+    };
+    const deliveryPolicy = calculateDeliveryPolicy(restaurantProfile, deliveryLocation);
+    const deliveryFee = req.body.deliveryFee === undefined
+      ? deliveryPolicy.deliveryFee
+      : toNumber(req.body.deliveryFee, deliveryPolicy.deliveryFee);
     const discountAmount = toNumber(req.body.discountAmount, 0);
     const rewardDiscountAmount = toNumber(req.body.rewardDiscountAmount, 0);
     const total = Math.max(subtotal + deliveryFee - discountAmount - rewardDiscountAmount, 0);

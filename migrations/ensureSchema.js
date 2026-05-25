@@ -473,6 +473,21 @@ async function ensureSchema(sequelize) {
     type: DataTypes.STRING,
     allowNull: true,
   });
+  await ensureColumn(queryInterface, "RestaurantProfiles", "freeDeliveryDistanceKm", {
+    type: DataTypes.FLOAT,
+    allowNull: false,
+    defaultValue: 0,
+  });
+  await ensureColumn(queryInterface, "RestaurantProfiles", "deliveryPricePerKm", {
+    type: DataTypes.FLOAT,
+    allowNull: false,
+    defaultValue: 0,
+  });
+  await ensureColumn(queryInterface, "RestaurantProfiles", "appDeliveryFee", {
+    type: DataTypes.FLOAT,
+    allowNull: false,
+    defaultValue: 0,
+  });
   await ensureColumn(queryInterface, "CouponUsages", "discountAmount", {
     type: DataTypes.FLOAT,
     allowNull: false,
