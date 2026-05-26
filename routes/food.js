@@ -545,6 +545,7 @@ router.post("/categories", authenticateAdmin, uploadImage.array("images", 1), as
       parentId: toNumber(req.body.parentId),
       sortOrder: toNumber(req.body.sortOrder, 0),
       isActive: req.body.isActive === undefined ? true : toBool(req.body.isActive, true),
+      showInSearchSuggestions: toBool(req.body.showInSearchSuggestions, false),
       image: req.files?.[0]?.filename || req.body.image || null,
       restaurantId: null,
     });
@@ -585,6 +586,9 @@ router.patch("/categories/:id", authenticateAdmin, uploadImage.array("images", 1
     if (req.body.parentId !== undefined) category.parentId = toNumber(req.body.parentId);
     if (req.body.sortOrder !== undefined) category.sortOrder = toNumber(req.body.sortOrder, category.sortOrder);
     if (req.body.isActive !== undefined) category.isActive = toBool(req.body.isActive, true);
+    if (req.body.showInSearchSuggestions !== undefined) {
+      category.showInSearchSuggestions = toBool(req.body.showInSearchSuggestions, false);
+    }
     category.restaurantId = null;
     if (req.files?.[0]) category.image = req.files[0].filename;
     if (req.body.image !== undefined && !req.files?.[0]) category.image = req.body.image || null;

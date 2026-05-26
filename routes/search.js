@@ -115,7 +115,9 @@ router.get("/search", async (req, res) => {
     const limit = Math.max(toNumber(req.query.limit, 20), 1);
     const userId = toNumber(req.query.userId);
 
-    await rememberSearch(userId, q, type);
+    if (req.query.remember !== "false") {
+      await rememberSearch(userId, q, type);
+    }
 
     const productWhere = { isAvailable: true };
     if (q) {
@@ -205,10 +207,22 @@ router.get("/search/suggestions", async (req, res) => {
     const q = String(req.query.q || "").trim();
     const where = q ? { name: { [Op.like]: `%${q}%` } } : {};
 
+    const categoryWhere = {
+      ...where,
+      isActive: true,
+      showInSearchSuggestions: true,
+      restaurantId: null,
+    };
+
     const [products, restaurants, categories] = await Promise.all([
       Product.findAll({ where: { ...where, isAvailable: true }, attributes: ["id", "name"], limit: 8 }),
       User.findAll({ where: { ...where, role: "restaurant" }, attributes: ["id", "name"], limit: 8 }),
-      Category.findAll({ where: { ...where, isActive: true }, attributes: ["id", "name", "type"], limit: 8 }),
+      Category.findAll({
+        where: categoryWhere,
+        attributes: ["id", "name", "type", "image"],
+        order: [["sortOrder", "ASC"], ["createdAt", "DESC"]],
+        limit: 12,
+      }),
     ]);
 
     return res.json({ products, restaurants, categories });

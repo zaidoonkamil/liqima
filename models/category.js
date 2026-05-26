@@ -38,6 +38,11 @@ const Category = sequelize.define("Category", {
     allowNull: false,
     defaultValue: true,
   },
+  showInSearchSuggestions: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: false,
+  },
 }, {
   timestamps: true,
 });
