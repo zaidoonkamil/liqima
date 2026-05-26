@@ -1129,6 +1129,80 @@ router.post("/products", uploadImage.array("images", 5), async (req, res) => {
 
 router.get("/products", async (req, res) => {
   try {
+    if (req.query.nearby === "true") {
+      const userLocation = await resolveRequestLocation(req);
+      const userId = toNumber(req.query.userId);
+      const maxDistanceKm = toNumber(req.query.radiusKm, 10) || 10;
+      const limit = toNumber(req.query.limit, 50) || 50;
+      const categoryId = toNumber(req.query.categoryId);
+
+      const restaurants = await User.findAll({
+        where: { role: "restaurant", isVerified: true },
+        attributes: { exclude: ["password"] },
+        include: [{ model: RestaurantProfile, as: "restaurantProfile", where: { status: "active" } }],
+      });
+
+      const restaurantsWithDistance = restaurants
+        .map((restaurant) => ({
+          restaurant,
+          distance: distanceKm(userLocation, restaurant.restaurantProfile),
+        }))
+        .filter(({ distance }) => distance !== null && distance <= maxDistanceKm);
+
+      const restaurantIds = restaurantsWithDistance.map(({ restaurant }) => restaurant.id);
+      if (restaurantIds.length === 0) return res.json([]);
+
+      const where = {
+        isAvailable: true,
+        userId: { [Op.in]: restaurantIds },
+        ...(categoryId ? { categoryId } : {}),
+      };
+
+      const products = await Product.findAll({
+        where,
+        include: [
+          ...productInclude(),
+          { model: OrderItem, as: "orderItems", attributes: ["quantity"] },
+        ],
+        order: [["createdAt", "DESC"]],
+      });
+
+      let formattedProducts = products.map((product) => {
+        const json = product.toJSON ? product.toJSON() : product;
+        const orderCount = (json.orderItems || []).reduce(
+          (sum, item) => sum + Number(item.quantity || 0),
+          0
+        );
+        const sellerDistance = restaurantsWithDistance.find(
+          ({ restaurant }) => Number(restaurant.id) === Number(json.userId)
+        )?.distance;
+        return { ...json, orderCount, distanceKm: sellerDistance };
+      });
+
+      const orderedProducts = formattedProducts.filter((product) => product.orderCount > 0);
+      formattedProducts = (orderedProducts.length > 0
+        ? orderedProducts.sort((a, b) => b.orderCount - a.orderCount)
+        : shuffleList(formattedProducts)
+      ).slice(0, limit);
+
+      if (userId) {
+        const favorites = await Favorite.findAll({
+          where: {
+            userId,
+            productId: { [Op.in]: formattedProducts.map((product) => product.id) },
+          },
+          attributes: ["productId"],
+          raw: true,
+        });
+        const favoriteIds = new Set(favorites.map((item) => Number(item.productId)));
+        formattedProducts.forEach((product) => {
+          product.isFavorite = favoriteIds.has(Number(product.id));
+        });
+      }
+
+      return res.json(formattedProducts);
+    }
+
     const where = {};
     if (req.query.includeUnavailable !== "true") where.isAvailable = true;
     if (req.query.restaurantId) where.userId = req.query.restaurantId;
