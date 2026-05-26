@@ -72,7 +72,6 @@ function basketInclude() {
           as: "product",
           include: [
             { model: Category, as: "category" },
-            { model: ProductAddon, as: "addons" },
             {
               model: User,
               as: "seller",
