@@ -16,6 +16,7 @@ const couponsRouter = require("./routes/coupons");
 const favoritesRouter = require("./routes/favorites");
 const cartRouter = require("./routes/cart");
 const chat = require("./services/chat");
+const ordersSocket = require("./services/orderSocket");
 
 let whatsappRouter = null;
 let startWhatsAppAutoInit = null;
@@ -105,6 +106,7 @@ if (whatsappRouter) {
 }
 
 chat.initChatSocket(io);
+ordersSocket.initOrderSocket(io);
 
 if (startWhatsAppAutoInit) {
   startWhatsAppAutoInit();

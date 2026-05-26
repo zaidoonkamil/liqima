@@ -18,6 +18,7 @@ const {
 } = require("../models");
 const sequelize = require("../config/db");
 const { normalizePhone } = require("../services/otpService");
+const { emitOrderChanged } = require("../services/orderSocket");
 
 const router = express.Router();
 const saltRounds = 10;
@@ -1594,7 +1595,9 @@ router.post("/orders", async (req, res) => {
     await transaction.commit();
 
     const createdOrder = await Order.findByPk(order.id, { include: orderInclude() });
-    return res.status(201).json(formatOrder(createdOrder));
+    const formattedOrder = formatOrder(createdOrder);
+    emitOrderChanged(formattedOrder);
+    return res.status(201).json(formattedOrder);
   } catch (error) {
     await transaction.rollback();
     console.error("Create order error:", error);
@@ -1729,7 +1732,9 @@ router.patch("/orders/:id/status", async (req, res) => {
     await order.save();
 
     const updatedOrder = await Order.findByPk(order.id, { include: orderInclude() });
-    return res.json(formatOrder(updatedOrder));
+    const formattedOrder = formatOrder(updatedOrder);
+    emitOrderChanged(formattedOrder);
+    return res.json(formattedOrder);
   } catch (error) {
     console.error("Update order status error:", error);
     return res.status(500).json({ error: "Internal Server Error" });
@@ -1887,7 +1892,9 @@ router.patch("/orders/:id/restaurant-status", async (req, res) => {
     await order.save();
 
     const updatedOrder = await Order.findByPk(order.id, { include: orderInclude() });
-    return res.json(formatOrder(updatedOrder));
+    const formattedOrder = formatOrder(updatedOrder);
+    emitOrderChanged(formattedOrder);
+    return res.json(formattedOrder);
   } catch (error) {
     console.error("Restaurant status error:", error);
     return res.status(500).json({ error: "Internal Server Error" });
@@ -1928,7 +1935,9 @@ router.patch("/orders/:id/assign-delivery", async (req, res) => {
     await order.save();
 
     const updatedOrder = await Order.findByPk(order.id, { include: orderInclude() });
-    return res.json(formatOrder(updatedOrder));
+    const formattedOrder = formatOrder(updatedOrder);
+    emitOrderChanged(formattedOrder);
+    return res.json(formattedOrder);
   } catch (error) {
     console.error("Assign delivery error:", error);
     return res.status(500).json({ error: "Internal Server Error" });
@@ -1961,7 +1970,9 @@ router.patch("/orders/:id/delivery-status", async (req, res) => {
     await order.save();
 
     const updatedOrder = await Order.findByPk(order.id, { include: orderInclude() });
-    return res.json(formatOrder(updatedOrder));
+    const formattedOrder = formatOrder(updatedOrder);
+    emitOrderChanged(formattedOrder);
+    return res.json(formattedOrder);
   } catch (error) {
     console.error("Delivery status error:", error);
     return res.status(500).json({ error: "Internal Server Error" });
