@@ -691,22 +691,57 @@ router.post(
 
 router.get("/restaurants", async (req, res) => {
   try {
+    const userLocation = await resolveRequestLocation(req);
+    const userId = toNumber(req.query.userId);
+    const maxDistanceKm = toNumber(req.query.radiusKm, 10) || 10;
+    const limit = toNumber(req.query.limit, 80) || 80;
+    const nearbyOnly = req.query.nearby === "true";
+
     const restaurants = await User.findAll({
-      where: { role: "restaurant" },
+      where: nearbyOnly
+        ? { role: "restaurant", isVerified: true }
+        : { role: "restaurant" },
       attributes: { exclude: ["password"] },
-      include: restaurantInclude(),
+      include: nearbyOnly
+        ? [{ model: RestaurantProfile, as: "restaurantProfile", where: { status: "active" } }]
+        : restaurantInclude(),
       order: [["createdAt", "DESC"]],
     });
-    return res.json(
-      restaurants.map((restaurant) => {
+
+    let result = restaurants.map((restaurant) => {
         const json = restaurant.toJSON ? restaurant.toJSON() : restaurant;
         return {
           ...json,
           rating: Number(json.restaurantProfile?.rating || json.rating || 0),
           ratingsCount: Number(json.restaurantProfile?.ratingsCount || json.ratingsCount || 0),
+          distanceKm: distanceKm(userLocation, json.restaurantProfile),
         };
-      })
-    );
+      });
+
+    if (nearbyOnly) {
+      result = result
+        .filter((restaurant) => restaurant.distanceKm !== null && restaurant.distanceKm <= maxDistanceKm)
+        .sort((a, b) => (a.distanceKm ?? 0) - (b.distanceKm ?? 0))
+        .slice(0, limit);
+    }
+
+    if (userId && result.length > 0) {
+      const favorites = await RestaurantFavorite.findAll({
+        where: {
+          userId,
+          restaurantId: { [Op.in]: result.map((restaurant) => restaurant.id) },
+        },
+        attributes: ["restaurantId"],
+        raw: true,
+      });
+      const favoriteIds = new Set(favorites.map((item) => Number(item.restaurantId)));
+      result = result.map((restaurant) => ({
+        ...restaurant,
+        isFavorite: favoriteIds.has(Number(restaurant.id)),
+      }));
+    }
+
+    return res.json(result);
   } catch (error) {
     console.error("Restaurants error:", error);
     return res.status(500).json({ error: "Internal Server Error" });
