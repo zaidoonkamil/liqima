@@ -1790,6 +1790,80 @@ router.get("/deliveries/:deliveryUserId/orders", async (req, res) => {
   }
 });
 
+router.get("/deliveries/:deliveryUserId/dashboard", async (req, res) => {
+  try {
+    const deliveryUserId = toNumber(req.params.deliveryUserId);
+    if (!deliveryUserId) return res.status(400).json({ error: "deliveryUserId is required" });
+
+    const delivery = await User.findOne({
+      where: { id: deliveryUserId, role: "delivery" },
+      attributes: { exclude: ["password"] },
+      include: [{ model: DeliveryProfile, as: "deliveryProfile" }],
+    });
+    if (!delivery) return res.status(404).json({ error: "Delivery employee not found" });
+
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+
+    const orders = await Order.findAll({
+      where: { deliveryUserId },
+      include: orderInclude(),
+      order: [["createdAt", "DESC"]],
+      limit: 120,
+    });
+
+    const todayOrders = orders.filter((order) => {
+      const createdAt = new Date(order.createdAt);
+      return createdAt >= todayStart && createdAt < todayEnd;
+    });
+    const deliveredToday = orders.filter((order) => {
+      if (order.status !== "delivered" || !order.deliveredAt) return false;
+      const deliveredAt = new Date(order.deliveredAt);
+      return deliveredAt >= todayStart && deliveredAt < todayEnd;
+    });
+    const activeOrders = orders.filter((order) =>
+      ["ready_for_pickup", "on_way"].includes(order.status)
+    );
+    const totalDelivered = orders.filter((order) => order.status === "delivered");
+    const todayRevenue = deliveredToday.reduce(
+      (sum, order) => sum + Number(order.deliveryFee || 0),
+      0
+    );
+    const totalRevenue = totalDelivered.reduce(
+      (sum, order) => sum + Number(order.deliveryFee || 0),
+      0
+    );
+    const maxDistanceKm = orders.reduce((max, order) => {
+      const restaurantProfile = order.restaurant?.restaurantProfile;
+      const deliveryLocation =
+        order.latitude == null || order.longitude == null
+          ? null
+          : { latitude: order.latitude, longitude: order.longitude };
+      const distance = distanceKm(deliveryLocation, restaurantProfile);
+      return distance === null ? max : Math.max(max, distance);
+    }, 0);
+
+    return res.json({
+      delivery: delivery.toJSON ? delivery.toJSON() : delivery,
+      stats: {
+        todayOrders: todayOrders.length,
+        activeOrders: activeOrders.length,
+        deliveredToday: deliveredToday.length,
+        todayRevenue,
+        totalRevenue,
+        totalOrders: orders.length,
+        totalTrips: totalDelivered.length,
+        maxDistanceKm: Number(maxDistanceKm.toFixed(1)),
+      },
+      recentOrders: orders.slice(0, 8).map(formatOrder),
+    });
+  } catch (error) {
+    console.error("Delivery dashboard error:", error);
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
 router.patch("/orders/:id/restaurant-status", async (req, res) => {
   try {
     const restaurantId = toNumber(req.body.restaurantId);
