@@ -1,8 +1,10 @@
 {
   "dependencies": {
+    "@types/cors": "^2.8.19",
     "@whiskeysockets/baileys": "^7.0.0-rc13",
     "axios": "^1.16.1",
     "bcrypt": "^6.0.0",
+    "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "http": "^0.0.1-security",

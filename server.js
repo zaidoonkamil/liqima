@@ -1,5 +1,6 @@
 const express = require("express");
 const http = require("http");
+const cors = require("cors");
 const { Server } = require("socket.io");
 const { Op } = require("sequelize");
 const sequelize = require("./config/db");
@@ -81,6 +82,7 @@ const io = new Server(server, {
   },
 });
 
+app.use(cors({ origin: "*", methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"] }));
 app.use(express.json());
 app.use("/uploads", express.static("./uploads"));
 
