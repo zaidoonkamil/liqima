@@ -57,7 +57,7 @@ async function cleanupProductsWithoutSubcategory() {
 }
 
 sequelize
-  .sync({ alter: true })
+  .sync({ force: true })
   .then(async () => {
     console.log("Database & tables synced!");
     await ensureSchema(sequelize);
