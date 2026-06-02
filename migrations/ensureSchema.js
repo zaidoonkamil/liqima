@@ -488,6 +488,11 @@ async function ensureSchema(sequelize) {
     allowNull: false,
     defaultValue: 0,
   });
+  await ensureColumn(queryInterface, "RestaurantProfiles", "notificationsEnabled", {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: true,
+  });
   await ensureColumn(queryInterface, "CouponUsages", "discountAmount", {
     type: DataTypes.FLOAT,
     allowNull: false,

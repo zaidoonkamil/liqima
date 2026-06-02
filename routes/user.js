@@ -421,6 +421,7 @@ router.post(
         openingTime: toText(req.body.openingTime),
         closingTime: toText(req.body.closingTime),
         isFeatured: toBool(req.body.isFeatured, false),
+        notificationsEnabled: toBool(req.body.notificationsEnabled, true),
         freeDelivery: toBool(req.body.freeDelivery, false),
         status: toText(req.body.status, "active"),
       }, { transaction });

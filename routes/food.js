@@ -19,9 +19,17 @@ const {
 const sequelize = require("../config/db");
 const { normalizePhone } = require("../services/otpService");
 const { emitOrderChanged } = require("../services/orderSocket");
+const { notifyOrderEvent } = require("../services/orderNotifications");
 
 const router = express.Router();
 const saltRounds = 10;
+
+function publishOrderChanged(order, event = "status_changed") {
+  emitOrderChanged(order);
+  notifyOrderEvent(order, event).catch((error) => {
+    console.error("Order notification dispatch error:", error.message);
+  });
+}
 
 function authenticateAdmin(req, res, next) {
   const authHeader = req.headers.authorization || "";
@@ -680,6 +688,7 @@ router.post(
       openingTime: toText(req.body.openingTime),
       closingTime: toText(req.body.closingTime),
       isFeatured: toBool(req.body.isFeatured, false),
+      notificationsEnabled: toBool(req.body.notificationsEnabled, true),
       freeDelivery: toBool(req.body.freeDelivery, false),
       status: toText(req.body.status, "pending"),
     }, { transaction });
@@ -912,6 +921,10 @@ router.patch(
           req.body.isFeatured === undefined
             ? currentProfile?.isFeatured || false
             : toBool(req.body.isFeatured, false),
+        notificationsEnabled:
+          req.body.notificationsEnabled === undefined
+            ? currentProfile?.notificationsEnabled ?? true
+            : toBool(req.body.notificationsEnabled, true),
         freeDelivery:
           req.body.freeDelivery === undefined
             ? currentProfile?.freeDelivery || false
@@ -936,6 +949,41 @@ router.patch(
     }
   }
 );
+
+router.patch("/restaurants/:id/notifications", authenticateAdmin, async (req, res) => {
+  try {
+    const restaurantId = toNumber(req.params.id);
+    const notificationsEnabled = toBool(req.body.notificationsEnabled, true);
+
+    if (!restaurantId) {
+      return res.status(400).json({ error: "Valid restaurant id is required" });
+    }
+
+    const restaurant = await User.findOne({
+      where: { id: restaurantId, role: "restaurant" },
+      attributes: { exclude: ["password"] },
+      include: [{ model: RestaurantProfile, as: "restaurantProfile" }],
+    });
+
+    if (!restaurant) return res.status(404).json({ error: "Restaurant not found" });
+
+    const profile = restaurant.restaurantProfile
+      ? await restaurant.restaurantProfile.update({ notificationsEnabled })
+      : await RestaurantProfile.create({
+          userId: restaurant.id,
+          logo: restaurant.image,
+          notificationsEnabled,
+        });
+
+    return res.json({
+      user: publicUser(restaurant),
+      profile,
+    });
+  } catch (error) {
+    console.error("Update restaurant notifications error:", error);
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+});
 
 router.post(
   "/deliveries",
@@ -1600,7 +1648,7 @@ router.post("/orders", async (req, res) => {
 
     const createdOrder = await Order.findByPk(order.id, { include: orderInclude() });
     const formattedOrder = formatOrder(createdOrder);
-    emitOrderChanged(formattedOrder);
+    publishOrderChanged(formattedOrder, "created");
     return res.status(201).json(formattedOrder);
   } catch (error) {
     await transaction.rollback();
@@ -1737,7 +1785,7 @@ router.patch("/orders/:id/status", async (req, res) => {
 
     const updatedOrder = await Order.findByPk(order.id, { include: orderInclude() });
     const formattedOrder = formatOrder(updatedOrder);
-    emitOrderChanged(formattedOrder);
+    publishOrderChanged(formattedOrder, "status_changed");
     return res.json(formattedOrder);
   } catch (error) {
     console.error("Update order status error:", error);
@@ -1897,7 +1945,7 @@ router.patch("/orders/:id/restaurant-status", async (req, res) => {
 
     const updatedOrder = await Order.findByPk(order.id, { include: orderInclude() });
     const formattedOrder = formatOrder(updatedOrder);
-    emitOrderChanged(formattedOrder);
+    publishOrderChanged(formattedOrder, "status_changed");
     return res.json(formattedOrder);
   } catch (error) {
     console.error("Restaurant status error:", error);
@@ -1940,7 +1988,7 @@ router.patch("/orders/:id/assign-delivery", async (req, res) => {
 
     const updatedOrder = await Order.findByPk(order.id, { include: orderInclude() });
     const formattedOrder = formatOrder(updatedOrder);
-    emitOrderChanged(formattedOrder);
+    publishOrderChanged(formattedOrder, "assigned_delivery");
     return res.json(formattedOrder);
   } catch (error) {
     console.error("Assign delivery error:", error);
@@ -1975,7 +2023,7 @@ router.patch("/orders/:id/delivery-status", async (req, res) => {
 
     const updatedOrder = await Order.findByPk(order.id, { include: orderInclude() });
     const formattedOrder = formatOrder(updatedOrder);
-    emitOrderChanged(formattedOrder);
+    publishOrderChanged(formattedOrder, "status_changed");
     return res.json(formattedOrder);
   } catch (error) {
     console.error("Delivery status error:", error);

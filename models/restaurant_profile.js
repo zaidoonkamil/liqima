@@ -115,6 +115,11 @@ const RestaurantProfile = sequelize.define("RestaurantProfile", {
     allowNull: false,
     defaultValue: false,
   },
+  notificationsEnabled: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: true,
+  },
   freeDelivery: {
     type: DataTypes.BOOLEAN,
     allowNull: false,

@@ -16,9 +16,18 @@ const {
   CouponUsage,
 } = require("../models");
 const { normalizePhone } = require("../services/otpService");
+const { emitOrderChanged } = require("../services/orderSocket");
+const { notifyOrderEvent } = require("../services/orderNotifications");
 
 const router = express.Router();
 const PAYMENT_METHODS = ["cash", "card", "apple_pay"];
+
+function publishOrderCreated(order) {
+  emitOrderChanged(order);
+  notifyOrderEvent(order, "created").catch((error) => {
+    console.error("Order notification dispatch error:", error.message);
+  });
+}
 
 function toNumber(value, fallback = null) {
   if (value === undefined || value === null || value === "") return fallback;
@@ -703,6 +712,7 @@ router.post("/users/:userId/checkout", async (req, res) => {
     await transaction.commit();
 
     const createdOrder = await Order.findByPk(order.id, { include: orderInclude() });
+    publishOrderCreated(createdOrder);
     return res.status(201).json({
       message: "Order created successfully",
       order: createdOrder,
